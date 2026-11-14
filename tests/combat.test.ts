@@ -381,3 +381,73 @@ describe('roguelite run', () => {
     expect(run.enemyForFight().speed).toBeGreaterThan(ENEMIES[0].speed);
   });
 });
+
+describe('chain, assist and frenzy', () => {
+  /** Script attack after attack at a fixed spacing; returns their strike times. */
+  const series = (n: number, gap = 1500): number[] => {
+    const strikes: number[] = [];
+    for (let i = 0; i < n; i++) strikes.push(START + i * gap + L.windupMs);
+    return strikes;
+  };
+
+  it('perfects in a row chain and deal more posture damage', () => {
+    const d = makeDuel({ enemy: { ...TEST_ENEMY, postureMax: 1000 }, timing: { ...PRESET_SEKIRO_LIKE, enemyPostureRegenPerSec: 0 } });
+    const postures: number[] = [];
+    const chains: number[] = [];
+    for (const [i, s0] of series(3).entries()) {
+      // Each perfect's hit-stop leaves the enemy clock behind real time; strikes land that much later.
+      const s = s0 + (i ? d.time - d.enemy.clock : 0);
+      script(d, L, START + i * 1500);
+      const evs = drive(d, guardAt(POSES.left, s - 60), s + 700);
+      const p = evs.find((e) => e.type === 'perfect')!;
+      chains.push(p.chain!);
+      postures.push(d.enemy.posture);
+      drive(d, () => POSES.neutral, START + (i + 1) * 1500 - 10); // lower the guard between attacks
+    }
+    expect(chains).toEqual([1, 2, 3]);
+    // No regen, so each step is the parry's own damage.
+    const step = (k: number) => postures[k] - (k ? postures[k - 1] : 0);
+    expect(step(1) / step(0)).toBeCloseTo(1.15, 1);
+    expect(step(2) / step(0)).toBeCloseTo(1.3, 1);
+  });
+
+  it('a hit resets the chain', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    drive(d, guardAt(POSES.left, S - 60), S + 700);
+    expect(d.player.chain).toBe(1);
+    drive(d, () => POSES.neutral, START + 1490);
+    script(d, L, START + 1500);
+    drive(d, () => POSES.neutral, START + 1500 + L.windupMs + 300);
+    expect(d.player.chain).toBe(0);
+  });
+
+  it('after 3 hits in a row the perfect window widens, capped, until the next perfect', () => {
+    const d = makeDuel();
+    const base = PRESET_SEKIRO_LIKE.perfectEarlyMs;
+    for (let i = 0; i < 3; i++) {
+      script(d, L, START + i * 1500);
+      drive(d, () => POSES.neutral, START + i * 1500 + L.windupMs + 300);
+    }
+    expect(d.player.hitStreak).toBe(3);
+    expect(d.perfectEarlyMs()).toBe(base + PRESET_SEKIRO_LIKE.assistBonusMs);
+    d.mods.perfectWindowBonusMs = 75; // Keen Eye x3: the assist only tops up to the 80 ms cap
+    expect(d.perfectEarlyMs()).toBe(base + 80);
+    d.mods.perfectWindowBonusMs = 0;
+    // A guard 140 ms early is now perfect (it would be early without the assist).
+    const s = START + 3 * 1500 + L.windupMs;
+    script(d, L, START + 3 * 1500);
+    expect(outcome(drive(d, guardAt(POSES.left, s - 140), s + 700))?.type).toBe('perfect');
+    expect(d.assistOn).toBe(false);
+  });
+
+  it('a wounded enemy winds up faster, locked in when the attack starts', () => {
+    const d = makeDuel();
+    d.enemy.hp = TEST_ENEMY.hp * 0.2;
+    script(d, L, START);
+    const w = d.windup(L);
+    expect(w).toBeCloseTo(L.windupMs * 0.85, 5);
+    d.enemy.hp = TEST_ENEMY.hp; // healing mid-attack must not move the strike
+    expect(d.windup(L)).toBe(w);
+  });
+});

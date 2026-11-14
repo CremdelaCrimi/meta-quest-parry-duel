@@ -8,7 +8,8 @@ import { Duel } from './core/sim';
 import type { AbilityId, AttackDef, DuelEvent, Fault, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
-import { EnemyView, Sparks, SwordView } from './render/views';
+import { EnemyView, Sparks, SwordView, contactPoint } from './render/views';
+import { ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
 
 type Phase = 'calibrate' | 'fight' | 'won' | 'reward' | 'dead';
@@ -39,8 +40,8 @@ function outcomeColor(type: Attempt['type'], faults: Fault[] = []): keyof typeof
 }
 
 const FAULT_TEXT: Record<Fault, string> = {
-  early: 'early',
-  late: 'late',
+  early: 'too early',
+  late: 'too late',
   angle: 'angle',
   shaky: 'not held',
   locked: 'flailing',
@@ -66,18 +67,24 @@ export class Game {
   /** How to play: shown before the run and through the Trainer fight. */
   private readonly help = new CanvasPanel(1024, 880, 0.8);
   private helpXR = false;
-  /** Your HP/posture and the enemy's, low and centred so it's always in view. */
-  private readonly status = new CanvasPanel(1024, 200, 0.7);
-  /** Names the incoming swing and how to block it, above the enemy. */
+  /** Your HP and posture: a small strip that lazily follows the bottom of your view. */
+  private readonly status = new CanvasPanel(768, 150, 0.3);
+  /** Enemy name, HP, posture, chain and frenzy, floating above his head. */
+  private readonly enemyPanel = new CanvasPanel(1024, 200, 0.85);
+  /** Names the incoming swing and how to block it (Trainer fight only; ?callouts=1 keeps it on). */
   private readonly callout = new CanvasPanel(1024, 170, 0.75);
+  private readonly calloutsAlways = new URLSearchParams(location.search).get('callouts') === '1';
+  /** Result line above the enemy (PERFECT, BLOCK · too early...). ?results=0 leaves it to colour, sound and haptics. */
+  private readonly showResults = new URLSearchParams(location.search).get('results') !== '0';
   private calloutKey = '';
   private statusAt = 0;
-  /** Red flash around the head when you take a hit. */
-  private readonly hurt = new THREE.Mesh(
-    new THREE.SphereGeometry(0.3, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false }),
-  );
+  /** Stats panel during fights (A toggles); it always shows on the victory and death screens. */
+  private statsInFight = false;
+  /** Edge-of-view vignette: hit flash, low HP pulse, high posture warning. */
+  private readonly vignette = new Vignette();
   private hurtT = 0;
+  private readonly bladeA = new THREE.Vector3();
+  private readonly bladeB = new THREE.Vector3();
   private readonly cards = [0, 1, 2].map(() => new CanvasPanel(512, 640, 0.3));
   private offers: Pickup[] = [];
   private hover = -1;
@@ -115,9 +122,8 @@ export class Game {
     this.space.group.rotation.y = Math.PI;
     this.space.group.updateMatrixWorld(true);
 
-    scene.add(this.space.group, this.sparks.points, this.hurt);
-    this.hurt.renderOrder = 20;
-    this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh, this.help.mesh, this.status.mesh, this.callout.mesh);
+    scene.add(this.space.group, this.sparks.points, this.vignette.mesh, this.status.mesh);
+    this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh, this.help.mesh, this.enemyPanel.mesh, this.callout.mesh);
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this; // console tuning
     // The simple built-in swordsman is the default; ?enemy=rigged loads the Tripo/Mixamo model from public/enemy/.
     const q = new URLSearchParams(location.search);
@@ -128,8 +134,9 @@ export class Game {
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });
     place(this.banner.mesh, { x: 0, y: 0.5, z: 1.4 });
     place(this.help.mesh, { x: 1.1, y: 0.0, z: 1.1 });
-    place(this.status.mesh, { x: 0, y: -0.68, z: 1.2 });
-    place(this.callout.mesh, { x: 0, y: 0.68, z: 1.6 });
+    place(this.enemyPanel.mesh, { x: 0, y: 0.66, z: ENEMY_DIST });
+    place(this.callout.mesh, { x: 0, y: 0.95, z: ENEMY_DIST - 0.1 });
+    this.status.mesh.renderOrder = 12;
     this.callout.mesh.visible = false;
     this.drawHelp();
     this.cards.forEach((c, i) => place(c.mesh, { x: (i - 1) * 0.36, y: -0.35, z: 0.75 }));
@@ -162,17 +169,21 @@ export class Game {
     }
     if (f.btnY) this.cyclePreset(t);
     if (f.btnA) {
-      this.hudOn = !this.hudOn;
-      this.hud.mesh.visible = this.hudOn;
+      if (this.phase === 'fight') this.statsInFight = !this.statsInFight;
+      else this.hudOn = !this.hudOn;
     }
+    // Stats belong to the between-fights screens; during a fight only if asked for (A).
+    const between = this.phase === 'won' || this.phase === 'dead';
+    this.hud.mesh.visible = this.hudOn && (between || (this.phase === 'fight' && this.statsInFight));
+    place(this.hud.mesh, between ? { x: 0, y: -0.2, z: 1.3 } : { x: -1.0, y: -0.25, z: 1.25 });
     if (this.helpXR !== this.isXR) {
       // Entered or left the headset: controller wording vs mouse/keyboard wording.
       this.helpXR = this.isXR;
       this.drawHelp();
       if (this.phase === 'calibrate') this.setPhase('calibrate', t);
     }
-    // How-to-play stays up before the run and through the Trainer; A hides it with the stats.
-    this.help.mesh.visible = this.hudOn && (this.phase === 'calibrate' || this.run.fight === 0);
+    // How-to-play only on the start screen; the Trainer's swing callouts teach during the fight.
+    this.help.mesh.visible = this.phase === 'calibrate';
 
     switch (this.phase) {
       case 'calibrate':
@@ -200,16 +211,16 @@ export class Game {
     this.sword.update(dt);
     this.sparks.update(dt);
     this.updateCallout();
-    this.hurtT = Math.max(0, this.hurtT - dt / 450);
-    this.hurt.position.copy(f.headPos);
-    (this.hurt.material as THREE.MeshBasicMaterial).opacity = 0.3 * this.hurtT;
-    this.hurt.visible = this.hurtT > 0;
-    this.status.mesh.visible = this.phase !== 'calibrate';
-    if (this.status.mesh.visible && t >= this.statusAt) {
+    this.updateVignette(t, dt);
+    this.followView(this.status.mesh, f.headPos, f.headQuat, dt);
+    this.status.mesh.visible = this.phase === 'fight' || this.phase === 'won';
+    this.enemyPanel.mesh.visible = this.phase === 'fight' && this.duel.enemy.state !== 'dead';
+    if (t >= this.statusAt) {
       this.drawStatus();
+      this.drawEnemyPanel(t);
       this.statusAt = t + 100;
     }
-    if (this.hudOn && t >= this.hudAt) {
+    if (this.hud.mesh.visible && t >= this.hudAt) {
       this.drawHud(t);
       this.hudAt = t + 100; // 10 Hz: texture uploads are not free on Quest
     }
@@ -271,32 +282,36 @@ export class Game {
 
   private onEvent(ev: DuelEvent, t: number): void {
     const f = this.input.frame;
-    const contact = this.tmp.copy(f.hilt).lerp(f.tip, 0.6);
+    // Sparks fly from where the two blades actually meet.
+    this.enemyView.bladeWorld(this.bladeA, this.bladeB);
+    const contact = contactPoint(f.hilt, f.tip, this.bladeA, this.bladeB, this.tmp);
     switch (ev.type) {
-      case 'perfect':
+      case 'perfect': {
+        const n = ev.chain ?? 1;
         this.sfx.play('perfect');
-        this.input.pulse('right', 1, 50);
-        this.sparks.burst(contact, 0xffd060, 28, 2.5);
+        this.input.pulse('right', 1, 80); // matches the hit-stop so freeze and rumble end together
+        this.sparks.burst(contact, 0xffd060, 40, 2.5);
         this.sword.flash(0xffc040);
         this.record(ev.offsetMs!, 'perfect', []);
-        this.flashResult(`PERFECT  ${fmt(ev.offsetMs!)}`, COLORS.perfect, t);
+        this.flashResult(n > 1 ? `PERFECT ×${n} CHAIN` : 'PERFECT', COLORS.perfect, t);
         break;
+      }
       case 'block': {
         const col = outcomeColor('block', ev.faults);
         this.sfx.play('block');
-        this.input.pulse('right', 0.5, 35);
-        this.sparks.burst(contact, hexOf(col), 10, 1.4);
+        this.input.pulse('right', 0.5, 120);
+        this.sparks.burst(contact, hexOf(col), 12, 1.4);
         this.sword.flash(hexOf(col));
         this.record(ev.offsetMs!, 'block', ev.faults ?? []);
-        this.flashResult(`BLOCK: ${faultText(ev.faults)}  ${fmt(ev.offsetMs!)}`, COLORS[col], t);
+        this.flashResult(`BLOCK · ${faultText(ev.faults)}`, COLORS[col], t);
         break;
       }
       case 'hit': {
         this.sfx.play('hit');
         this.hurtT = 1;
         this.statusAt = 0;
-        this.input.pulse('right', 1, 120);
-        this.input.pulse('left', 1, 120);
+        this.input.pulse('right', 1, 250);
+        this.input.pulse('left', 1, 250);
         this.record(ev.offsetMs ?? 0, 'hit', ev.faults ?? []);
         const why =
           ev.perilous === 'thrust'
@@ -304,8 +319,8 @@ export class Game {
             : ev.perilous === 'sweep'
               ? ' (sweep: duck!)'
               : ev.faults?.includes('side')
-                ? ` (guard ${ev.dir})`
-                : `: ${faultText(ev.faults)}  ${ev.offsetMs !== undefined ? fmt(ev.offsetMs) : ''}`;
+                ? ` · block ${ev.dir === 'high' ? 'HIGH' : ev.dir?.toUpperCase()}`
+                : ` · ${faultText(ev.faults)}`;
         this.flashResult(`HIT${why}`, COLORS.hit, t);
         break;
       }
@@ -506,7 +521,7 @@ export class Game {
       const hi = 120;
       const X = (ms: number) => x0 + ((ms - lo) / (hi - lo)) * (x1 - x0);
       const y = 300;
-      const early = c.perfectEarlyMs + d.mods.perfectWindowBonusMs;
+      const early = d.perfectEarlyMs();
       ctx.fillStyle = 'rgba(111,182,255,0.18)';
       ctx.fillRect(X(lo), y - 34, X(c.blockLateMs) - X(lo), 68);
       ctx.fillStyle = 'rgba(255,211,77,0.35)';
@@ -605,9 +620,9 @@ export class Game {
       line('HOW TO PLAY', '800 54px system-ui, sans-serif', '#ffffff', 52);
       line(xr ? 'No button to block or attack. Your sword does it.' : 'Your mouse is the sword. Nothing to press to block.', '500 30px system-ui, sans-serif', '#9aa3b0', 70);
 
-      line('BLOCK: put your sword in the glowing box', '700 36px system-ui, sans-serif', COLORS.block, 46);
-      line('A ghost sword shows where. Get there when the box turns', '500 29px system-ui, sans-serif', '#d8dce4', 38);
-      line('GOLD, then hold still until the swing lands.', '500 29px system-ui, sans-serif', COLORS.perfect, 50);
+      line('BLOCK: match the glowing ghost sword', '700 36px system-ui, sans-serif', COLORS.block, 46);
+      line('A ring closes on it. Be there when it turns GOLD,', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line('then hold still until the swing lands.', '500 29px system-ui, sans-serif', COLORS.perfect, 50);
       line('↓  Vertical chop: sword flat above your head', '500 29px system-ui, sans-serif', '#d8dce4', 40);
       line('→ ←  Horizontal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 40);
       line('↘ ↙  Diagonal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 66);
@@ -615,13 +630,13 @@ export class Game {
       line(xr ? 'ATTACK: swing your sword into his body' : 'ATTACK: click while he is open', '700 36px system-ui, sans-serif', '#ff8a5a', 44);
       line('Hits hardest right after a perfect (gold) block.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
 
-      line('HEALTH: the bars under the enemy', '700 36px system-ui, sans-serif', COLORS.hit, 44);
-      line('Red = your HP. Orange = posture (fills when you block;', '500 29px system-ui, sans-serif', '#d8dce4', 38);
-      line('full = guard broken). The screen flashes red when hit.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
+      line('HEALTH: your strip sits low in your view', '700 36px system-ui, sans-serif', COLORS.hit, 44);
+      line('Red = HP. Orange = posture (fills as you block; full =', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line('guard broken). Perfects in a row CHAIN for more damage.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
 
       line('DODGE: not needed yet (lean or duck, later)', '600 30px system-ui, sans-serif', '#9aa3b0', 60);
       line(
-        xr ? 'Buttons: R trigger start · A hide panels · B re-center · Y difficulty' : 'Keys: H hide panels · R re-center · P difficulty · A/D lean · S duck',
+        xr ? 'Buttons: R trigger start · A stats · B re-center · Y difficulty' : 'Keys: H stats · R re-center · P difficulty · A/D lean · S duck',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,
@@ -629,60 +644,128 @@ export class Game {
     });
   }
 
-  /** Low, centred status strip: your HP and posture on the left, the enemy's on the right. */
+  /** Your strip: HP (with number) and posture, plus the assist badge when it's helping. */
   private drawStatus(): void {
     const d = this.duel;
-    const c = this.timing;
-    const e = d.enemy;
+    const p = d.player;
+    const pf = p.posture / this.timing.playerPostureMax;
     this.status.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.78)';
-      roundRect(ctx, 0, 0, w, h, 24);
+      ctx.fillStyle = 'rgba(10,12,18,0.7)';
+      roundRect(ctx, 0, 0, w, h, 30);
       ctx.fill();
-      const half = w / 2;
-      const side = (x: number, label: string, hp: number, hpMax: number, posture: number, postureMax: number) => {
-        ctx.font = '700 32px system-ui, sans-serif';
-        ctx.fillStyle = '#e8e8e8';
-        ctx.fillText(label, x, 48);
-        ctx.font = '600 28px system-ui, sans-serif';
-        ctx.fillStyle = COLORS.hit;
-        const hpText = `HP ${Math.max(0, Math.ceil(hp))}/${hpMax}`;
-        ctx.fillText(hpText, x + half - 60 - ctx.measureText(hpText).width, 48);
-        bar(ctx, x, 66, half - 60, 44, hp / hpMax, '#d04040');
-        ctx.fillStyle = '#9aa3b0';
-        ctx.font = '500 22px system-ui, sans-serif';
-        ctx.fillText('posture', x, 150);
-        bar(ctx, x + 90, 132, half - 150, 22, posture / postureMax, posture / postureMax > 0.75 ? '#ff5a1a' : '#ffb020');
-      };
-      side(30, 'YOU', d.player.hp, d.player.hpMax, d.player.posture, c.playerPostureMax);
-      side(half + 30, e.def.name.toUpperCase(), e.hp, e.def.hp, e.posture, e.def.postureMax);
+      ctx.font = '800 34px system-ui, sans-serif';
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fillText('YOU', 26, 50);
+      ctx.fillStyle = COLORS.hit;
+      ctx.font = '700 32px system-ui, sans-serif';
+      const hpText = `${Math.max(0, Math.ceil(p.hp))}`;
+      ctx.fillText(hpText, w - 26 - ctx.measureText(hpText).width, 50);
+      if (d.assistOn) {
+        ctx.font = '700 24px system-ui, sans-serif';
+        ctx.fillStyle = COLORS.block;
+        ctx.fillText(`ASSIST +${d.perfectEarlyMs() - this.timing.perfectEarlyMs - d.mods.perfectWindowBonusMs} ms`, 110, 48);
+      }
+      pill(ctx, 26, 66, w - 52, 30, p.hp / p.hpMax, '#e04848');
+      pill(ctx, 26, 108, w - 52, 18, pf, pf > 0.75 ? '#ff5a1a' : '#ffb020');
     });
   }
 
-  /** Name the incoming swing and how to block it, once per attack. */
+  /** Above the enemy's head: name, HP, posture (what perfects fill), chain and frenzy badges. */
+  private drawEnemyPanel(t: number): void {
+    const d = this.duel;
+    const e = d.enemy;
+    const pf = Math.min(1, e.posture / e.def.postureMax);
+    const frenzy = d.frenzy();
+    this.enemyPanel.draw((ctx, w, h) => {
+      ctx.fillStyle = 'rgba(10,12,18,0.6)';
+      roundRect(ctx, 0, 0, w, h, 30);
+      ctx.fill();
+      ctx.font = '800 40px system-ui, sans-serif';
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fillText(e.def.name.toUpperCase(), 30, 54);
+      let x = 30 + ctx.measureText(e.def.name.toUpperCase()).width + 24;
+      const badge = (text: string, color: string) => {
+        ctx.font = '800 30px system-ui, sans-serif';
+        const bw = ctx.measureText(text).width + 28;
+        ctx.fillStyle = color;
+        roundRect(ctx, x, 20, bw, 44, 22);
+        ctx.fill();
+        ctx.fillStyle = '#10131a';
+        ctx.fillText(text, x + 14, 53);
+        x += bw + 12;
+      };
+      if (d.player.chain > 1) badge(`×${d.player.chain} CHAIN`, COLORS.perfect);
+      if (frenzy) badge(frenzy.belowHp < 0.3 ? 'FRENZY!' : 'FRENZY', `rgba(255,80,80,${0.75 + 0.25 * Math.sin(t / 120)})`);
+      pill(ctx, 30, 82, w - 60, 40, e.hp / e.def.hp, '#e04848');
+      pill(ctx, 30, 138, w - 60, 34, pf, e.state === 'stagger' ? '#ffffff' : pf > 0.75 ? '#ff5a1a' : '#ffb020');
+      ctx.font = '700 24px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(16,19,26,0.85)';
+      ctx.fillText(e.state === 'stagger' ? 'BROKEN · STRIKE NOW' : 'POSTURE', 46, 164);
+    });
+  }
+
+  /**
+   * One line above the enemy. In the Trainer (or with ?callouts=1) it names each incoming swing
+   * and how to block it; otherwise it shows how your last guard went (PERFECT, BLOCK · too early...).
+   */
   private updateCallout(): void {
     const d = this.duel;
     const att = d.currentAttack;
     const e = d.enemy;
-    const show = this.phase === 'fight' && !!att && e.state === 'attack' && !e.struck;
-    const k = show ? `${att!.id}@${e.attackStart}` : '';
-    this.callout.mesh.visible = show;
-    if (!show || k === this.calloutKey) return;
+    const t = this.lastT;
+    const teach = this.calloutsAlways || this.run.fight === 0;
+    const swing = this.phase === 'fight' && teach && !!att && e.state === 'attack' && !e.struck;
+    const result = !swing && this.showResults && t - this.lastResult.t < 1100;
+    const k = swing ? `${att!.id}@${e.attackStart}` : result ? `r${this.lastResult.t}` : '';
+    this.callout.mesh.visible = swing || result;
+    if (!this.callout.mesh.visible || k === this.calloutKey) return;
     this.calloutKey = k;
-    const [title, how, color] = calloutFor(att!);
+    const [title, how, color] = swing ? calloutFor(att!) : [this.lastResult.text, '', this.lastResult.color];
     this.callout.draw((ctx, w) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.75)';
-      roundRect(ctx, 0, 0, w, 170, 24);
+      ctx.fillStyle = 'rgba(10,12,18,0.7)';
+      roundRect(ctx, how ? 0 : 120, how ? 0 : 20, how ? w : w - 240, how ? 170 : 110, 28);
       ctx.fill();
       ctx.textAlign = 'center';
       ctx.font = '800 60px system-ui, sans-serif';
       ctx.fillStyle = color;
-      ctx.fillText(title, w / 2, 72);
-      ctx.font = '600 40px system-ui, sans-serif';
-      ctx.fillStyle = '#e8e8e8';
-      ctx.fillText(how, w / 2, 134);
+      ctx.fillText(title, w / 2, how ? 72 : 96);
+      if (how) {
+        ctx.font = '600 40px system-ui, sans-serif';
+        ctx.fillStyle = '#e8e8e8';
+        ctx.fillText(how, w / 2, 134);
+      }
       ctx.textAlign = 'left';
     });
   }
+
+  /**
+   * Edge vignette, by priority: hit flash (red), HP under 25% (slow red pulse), posture over 75%
+   * (steady orange: one more block may break your guard).
+   */
+  private updateVignette(t: number, dt: number): void {
+    const f = this.input.frame;
+    this.hurtT = Math.max(0, this.hurtT - dt / 400);
+    const p = this.duel.player;
+    const fighting = this.phase === 'fight';
+    let color = 0xff2020;
+    let a = 0.7 * this.hurtT; // peaks at 0.7, fades out linearly over 400 ms
+    if (fighting && p.hp / p.hpMax < 0.25) a = Math.max(a, 0.25 + 0.2 * Math.sin(t / 220));
+    else if (fighting && p.posture / this.timing.playerPostureMax > 0.75 && a < 0.3) {
+      color = 0xff8a1a;
+      a = 0.35;
+    }
+    this.vignette.set(f.headPos, f.headQuat, color, a);
+  }
+
+  /** Keep a panel low in the view, catching up with head turns lazily so it never jitters. */
+  private followView(o: THREE.Object3D, head: THREE.Vector3, q: THREE.Quaternion, dt: number): void {
+    const target = this.tmpFollow.set(0, -0.42, -0.7).applyQuaternion(q).add(head); // peripheral, below the duel
+    if (o.userData.placed) o.position.lerp(target, 1 - Math.exp(-dt / 220));
+    else o.position.copy(target);
+    o.userData.placed = true;
+    o.lookAt(head);
+  }
+  private readonly tmpFollow = new THREE.Vector3();
 
   private showBanner(title: string, color: string, sub: string): void {
     this.banner.mesh.visible = true;
@@ -730,6 +813,59 @@ export class Game {
 
 // ---------------------------------------------------------------- helpers
 
+/** Rounded bar with a soft track and a highlight along the top of the fill. */
+function pill(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, f: number, color: string): void {
+  const r = h / 2;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+  const fw = Math.max(0, Math.min(1, f)) * w;
+  if (fw < 1) return;
+  ctx.fillStyle = color;
+  roundRect(ctx, x, y, Math.max(fw, h), h, r);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  roundRect(ctx, x + 4, y + 3, Math.max(fw, h) - 8, h * 0.32, h * 0.16);
+  ctx.fill();
+}
+
+/**
+ * Coloured glow at the edge of vision, clear in the middle. A small sphere around the head drawn
+ * last; the shader fades it in by angle away from where you're looking, so it works in both eyes.
+ */
+class Vignette {
+  readonly mesh: THREE.Mesh;
+  private readonly mat: THREE.ShaderMaterial;
+  private readonly fwd = new THREE.Vector3();
+
+  constructor() {
+    this.mat = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: new THREE.Color() }, uAlpha: { value: 0 }, uFwd: { value: new THREE.Vector3(0, 0, -1) }, uHead: { value: new THREE.Vector3() } },
+      vertexShader: 'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+      fragmentShader:
+        'uniform vec3 uColor; uniform float uAlpha; uniform vec3 uFwd; uniform vec3 uHead; varying vec3 vW;' +
+        'void main(){ float d = dot(normalize(vW - uHead), uFwd); float edge = smoothstep(0.9, 0.45, d); gl_FragColor = vec4(uColor, uAlpha * edge); }',
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.BackSide,
+    });
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.25, 24, 16), this.mat);
+    this.mesh.renderOrder = 30;
+    this.mesh.frustumCulled = false;
+  }
+
+  set(head: THREE.Vector3, q: THREE.Quaternion, color: number, alpha: number): void {
+    this.mesh.visible = alpha > 0.01;
+    if (!this.mesh.visible) return;
+    this.mesh.position.copy(head);
+    this.mat.uniforms.uHead.value.copy(head);
+    this.mat.uniforms.uFwd.value.copy(this.fwd.set(0, 0, -1).applyQuaternion(q));
+    this.mat.uniforms.uColor.value.setHex(color);
+    this.mat.uniforms.uAlpha.value = Math.min(1, alpha);
+  }
+}
+
 /** Place a panel in duel coordinates, turned to face the player. */
 function place(mesh: THREE.Object3D, v: V3): void {
   DuelSpace.toLocal(v, mesh.position);
@@ -755,8 +891,7 @@ function calloutFor(a: AttackDef): [string, string, string] {
 
 /** Faults as words, e.g. "angle + not held". Timing is left to fmt(), which says early/late. */
 function faultText(faults: Fault[] = []): string {
-  const rest = faults.filter((f) => f !== 'early' && f !== 'late').map((f) => FAULT_TEXT[f]);
-  return rest.length ? rest.join(' + ') : 'timing';
+  return faults.length ? faults.map((f) => FAULT_TEXT[f]).join(' + ') : 'timing';
 }
 
 function fmt(ms: number): string {

@@ -1,5 +1,6 @@
 import { DodgeDetector } from './dodge';
 import type { DodgeHit } from './dodge';
+import { CHAIN_MULT, FRENZY } from './config';
 import { classifyGuard, lerpPose, lerpV3, makePose } from './guard';
 import type { GuardReading } from './guard';
 import { Rng } from './rng';
@@ -69,6 +70,10 @@ export class Duel {
     hitStopUntil: -Infinity,
     abilityReadyAt: { slowTime: 0, ward: 0 } as Record<AbilityId, number>,
     dead: false,
+    /** Perfect parries in a row (reset by a block or a hit). */
+    chain: 0,
+    /** Hits taken in a row (reset by a perfect). Drives the assist. */
+    hitStreak: 0,
   };
 
   readonly enemy = {
@@ -85,6 +90,8 @@ export class Duel {
     attackStart: 0,
     struck: false,
     staggerUntil: 0,
+    /** Frenzy windup multiplier, fixed when the current attack started so its strike never moves. */
+    windupScale: 1,
   };
 
   readonly guard: GuardReading = { dir: null, angleErr: 90 };
@@ -136,9 +143,29 @@ export class Duel {
     return e.state === 'attack' && e.combo ? e.combo.steps[e.stepIndex].attack : null;
   }
 
-  /** Scaled windup of an attack in enemy-clock ms. */
+  /** Scaled windup of an attack in enemy-clock ms (enemy speed and frenzy). */
   windup(att: AttackDef): number {
-    return att.windupMs / this.enemy.def.speed;
+    return (att.windupMs / this.enemy.def.speed) * this.enemy.windupScale;
+  }
+
+  /** Current frenzy level for the enemy's HP, or null when healthy. */
+  frenzy(): (typeof FRENZY)[number] | null {
+    const f = this.enemy.hp / this.enemy.def.hp;
+    return FRENZY.find((l) => f < l.belowHp) ?? null;
+  }
+
+  /** Is the miss-streak assist widening the perfect window right now? */
+  get assistOn(): boolean {
+    const c = this.cfg;
+    return c.assistBonusMs > 0 && this.player.hitStreak >= c.assistAfterHits;
+  }
+
+  /** How early before the strike a guard may arrive and still be perfect (ms). */
+  perfectEarlyMs(): number {
+    const c = this.cfg;
+    const boons = this.mods.perfectWindowBonusMs;
+    const assist = this.assistOn ? Math.max(0, Math.min(c.assistBonusMs, c.windowBonusCapMs - boons)) : 0;
+    return c.perfectEarlyMs + boons + assist;
   }
 
   /** 0..1 progress through the current attack's windup, >1 after the strike. */
@@ -294,7 +321,7 @@ export class Duel {
   private judge(att: AttackDef, S: number, entryT: number, angleErr: number, t: number): void {
     const c = this.cfg;
     const offset = entryT - S;
-    const early = c.perfectEarlyMs + this.mods.perfectWindowBonusMs;
+    const early = this.perfectEarlyMs();
     const faults: Fault[] = [];
     if (offset < -early) faults.push('early');
     if (offset > c.perfectLateMs) faults.push('late');
@@ -315,7 +342,10 @@ export class Duel {
     const p = this.player;
     const e = this.enemy;
     const c = this.cfg;
-    e.posture += att.postureDamage * c.deflectEnemyPostureMult * this.mods.deflectPostureMult;
+    p.chain++;
+    p.hitStreak = 0;
+    const chainMult = CHAIN_MULT[Math.min(p.chain, CHAIN_MULT.length) - 1];
+    e.posture += att.postureDamage * c.deflectEnemyPostureMult * this.mods.deflectPostureMult * chainMult;
     e.postureHitAt = t;
     p.posture = Math.min(c.playerPostureMax - 1, p.posture + c.deflectPlayerPosture);
     p.postureHitAt = t;
@@ -327,7 +357,7 @@ export class Duel {
     p.hitStopFrom = t;
     p.hitStopUntil = t + stop;
     p.counterUntil = t + stop + c.counterWindowMs;
-    this.emit({ type: 'perfect', t, offsetMs: offset, attackId: att.id, dir: att.dir });
+    this.emit({ type: 'perfect', t, offsetMs: offset, attackId: att.id, dir: att.dir, chain: p.chain });
     if (breaks) this.breakEnemy(t);
   }
 
@@ -336,6 +366,7 @@ export class Duel {
     const e = this.enemy;
     const c = this.cfg;
     const dmg = att.damage * c.blockHpMult;
+    p.chain = 0;
     p.hp -= dmg;
     p.posture += att.postureDamage * c.blockPlayerPostureMult;
     p.postureHitAt = t;
@@ -359,6 +390,8 @@ export class Duel {
       return;
     }
     p.hp -= att.damage;
+    p.chain = 0;
+    p.hitStreak++;
     this.emit({ type: 'hit', t, offsetMs: offset, attackId: att.id, dir: att.dir, perilous: att.perilous, damage: att.damage, faults });
     this.checkPlayerDead(t);
   }
@@ -490,6 +523,7 @@ export class Duel {
     e.state = 'attack';
     e.attackStart = eStart;
     e.struck = false;
+    e.windupScale = this.frenzy()?.windup ?? 1;
     const att = this.currentAttack!;
     this.emit({ type: 'attackStart', t, attackId: att.id, dir: att.dir, perilous: att.perilous });
   }
@@ -507,7 +541,9 @@ export class Duel {
     switch (e.state) {
       case 'idle':
         if (this.ai && e.clock >= e.nextActionAt) {
-          this.startCombo(this.rng.pickWeighted(e.def.combos), e.nextActionAt, t);
+          const tw = this.frenzy()?.tripleWeight ?? 1;
+          const pool = tw === 1 ? e.def.combos : e.def.combos.map((c) => ({ ...c, weight: c.steps.length === 3 ? c.weight * tw : c.weight }));
+          this.startCombo(this.rng.pickWeighted(pool), e.nextActionAt, t);
         }
         break;
       case 'attack': {
@@ -523,7 +559,7 @@ export class Duel {
         } else {
           const end = strikeE + st.attack.recoverMs / spd;
           if (e.clock >= end) {
-            this.toIdle(end, this.rng.range(e.def.idleMinMs, e.def.idleMaxMs) / spd);
+            this.toIdle(end, (this.rng.range(e.def.idleMinMs, e.def.idleMaxMs) / spd) * (this.frenzy()?.idle ?? 1));
           }
         }
         break;

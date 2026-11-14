@@ -118,6 +118,14 @@ export interface TimingConfig {
   counterWindowMs: number;
   /** Enemy freeze on a perfect parry (doubled when it breaks posture). Player and camera never freeze. */
   hitStopMs: number;
+  /**
+   * Assist that only ever helps: after this many hits in a row (no perfect between), the perfect
+   * window opens assistBonusMs earlier until the next perfect. 0 bonus disables it.
+   */
+  assistAfterHits: number;
+  assistBonusMs: number;
+  /** The assist never pushes the total bonus on the perfect window (boons + assist) past this. */
+  windowBonusCapMs: number;
 
   playerDamage: number;
   playerPostureDamageOnBlocked: number;
@@ -185,6 +193,8 @@ export interface DuelEvent {
   t: number;
   /** Guard entry minus strike time (ms). Negative = early, positive = late. */
   offsetMs?: number;
+  /** On perfect: how many perfects in a row this is (1 = first). */
+  chain?: number;
   dir?: Dir;
   attackId?: string;
   perilous?: Perilous;

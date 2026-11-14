@@ -40,6 +40,20 @@ All three = perfect (gold). Otherwise the block is coloured by what went wrong: 
 violet = angle, orange = not held; red = hit. The HUD chart has a legend and a "not perfect because"
 tally. Tune with `?steadyMs=50&steadyMaxSpeed=1.2` (m/s at the blade tip; `steadyMs=0` turns it off).
 
+**Chain:** perfects in a row multiply the posture damage they deal (1.0 / 1.15 / 1.3 / 1.5× cap,
+`CHAIN_MULT`); a block or hit resets it. **Frenzy:** below 50% HP the enemy's windups are 10% shorter
+and pauses 20% shorter; below 25%, 15% / 40% and 3-hit strings twice as likely (`FRENZY`, locked in
+per attack so a strike never moves). **Assist:** after 3 hits in a row the perfect window opens 40 ms
+earlier until your next perfect, never past +80 ms total with boons (`?assistBonusMs=0` turns it off).
+Numbers were worked out with Gemini 3.1 Pro from the clips in `docs/clips/`.
+
+**Reading the fight:** a thin ghost sword shows the guard; an impact ring closes on it and turns gold
+as the perfect window opens. The enemy's HP, posture, chain and frenzy badges float above his head;
+your HP and posture strip follows the bottom of your view; the edge of vision glows red when hit or
+below 25% HP, orange when your posture is over 75%. Swing names show in the Trainer fight only
+(`?callouts=1` keeps them); otherwise the line above the enemy shows how your last guard went.
+Stats appear on the victory/death screens (A / H shows them mid-fight).
+
 Enemies attack in 1-, 2- and 3-hit strings with a fixed rhythm per enemy (`src/core/enemies.ts`);
 pips above the head show the string length. Each swing leaves a fading trail so you can learn its path.
 

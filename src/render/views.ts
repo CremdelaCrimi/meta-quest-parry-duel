@@ -131,13 +131,15 @@ const GUARD_GHOST: Record<string, SwordPose> = {
   right: key([0.32, -0.55, 0.35, 0.32, 0.2, 0.4]),
   low: key([0.2, -0.85, 0.3, 0.1, -1.05, 0.7]),
 };
-/** Hit zone around each guard (m): the box the swing cuts through. */
-const ZONE_SIZE: Record<string, [number, number, number]> = {
-  high: [0.95, 0.28, 0.4],
-  left: [0.34, 0.95, 0.4],
-  right: [0.34, 0.95, 0.4],
-  low: [0.5, 0.4, 0.5],
-};
+/**
+ * Impact ring, centred where your blade should cross the attack (middle of the ghost sword):
+ * radius when it appears and when it locks (m), and how long it takes to close (ms, enemy clock),
+ * ending exactly as the perfect window opens. 400 ms ~ comfortable reaction runway.
+ */
+// Gemini suggested 0.3 m; at arm's length (~0.4 m away) that fills half the view, so it's halved.
+const RING_START_M = 0.16;
+const RING_END_M = 0.05;
+const RING_LEAD_MS = 400;
 
 /** Enemy blade length (m); interpolated poses are renormalised so the sword never stretches. */
 const ENEMY_BLADE_M = 0.85;
@@ -254,15 +256,15 @@ export class EnemyView {
       this.root.add(b);
     }
 
-    // "Block here": a ghost sword at the guard the current attack needs, inside its hit zone.
-    const ghostGeo = new THREE.BoxGeometry(0.03, 1, 0.06);
+    // "Block here": a thin glowing ghost sword at the guard the attack needs, and an impact ring
+    // that closes on its middle so the timing reads at a glance.
+    const ghostGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 10); // a blade core, not a wall
     ghostGeo.translate(0, 0.5, 0);
     this.ghost = new THREE.Mesh(ghostGeo, this.ghostMat);
-    this.zone = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), this.zoneMat);
-    this.zoneFill = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.zoneFillMat);
+    this.ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.08, 8, 48), this.ringMat);
     this.pathMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.pathMat);
     this.pathMesh.frustumCulled = false;
-    for (const o of [this.ghost, this.zone, this.zoneFill, this.pathMesh]) {
+    for (const o of [this.ghost, this.ring, this.pathMesh]) {
       o.renderOrder = 15; // after the HUD panels (10), which don't write depth, so guides are never hidden
       o.visible = false;
       this.root.add(o);
@@ -271,12 +273,10 @@ export class EnemyView {
   }
 
   private readonly ghostMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
-  private readonly zoneMat = new THREE.LineBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.6, depthWrite: false });
-  private readonly zoneFillMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide });
+  private readonly ringMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending });
   private readonly pathMat = new THREE.MeshBasicMaterial({ color: 0xbfe0ff, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
   private readonly ghost: THREE.Mesh;
-  private readonly zone: THREE.LineSegments;
-  private readonly zoneFill: THREE.Mesh;
+  private readonly ring: THREE.Mesh;
   private readonly pathMesh: THREE.Mesh;
   private readonly pathGeos = new Map<string, THREE.BufferGeometry>();
   private readonly ghostPose: SwordPose = key([0, 0, 0, 0, 0, 0]);
@@ -307,8 +307,8 @@ export class EnemyView {
 
   /**
    * Telegraph aids for the current attack: the swing's path (faint, brightening), and where to
-   * block it (ghost sword in a hit-zone box). The box turns gold during the perfect-parry window,
-   * i.e. when your guard should arrive. Hidden for must-dodge attacks.
+   * block it (ghost sword plus a closing impact ring). Both turn gold when the perfect-parry window
+   * opens, i.e. when your guard should arrive. Hidden for must-dodge attacks.
    */
   private updateGuide(duel: Duel, head: V3): void {
     const att = duel.currentAttack;
@@ -316,7 +316,7 @@ export class EnemyView {
     const on = !!att && e.state === 'attack' && !e.struck && this.guides;
     const block = on && att!.perilous === 'none';
     this.pathMesh.visible = on;
-    this.ghost.visible = this.zone.visible = this.zoneFill.visible = block;
+    this.ghost.visible = this.ring.visible = block;
     if (!on) return;
     const a = att!;
     const p = Math.min(1, Math.max(0, duel.attackProgress()));
@@ -335,21 +335,21 @@ export class EnemyView {
     }
     placeSegment(this.ghost, DuelSpace.toLocal(gp.hilt, this.v1), DuelSpace.toLocal(gp.tip, this.v2), this.v3);
     this.ghost.scale.x = this.ghost.scale.z = 1;
+    // Impact ring: closes from RING_START_M to just around the ghost over RING_LEAD_MS, landing
+    // exactly when the perfect window opens; then it holds there in gold until the strike.
     lerp3(this.tmpV3, gp.hilt, gp.tip, 0.5);
-    for (const o of [this.zone, this.zoneFill]) {
-      DuelSpace.toLocal(this.tmpV3, o.position);
-      o.scale.set(...ZONE_SIZE[a.dir]);
-    }
-    // Gold from the start of the perfect window to the strike: be in place and still by then.
+    DuelSpace.toLocal(this.tmpV3, this.ring.position);
     const toStrike = (1 - p) * duel.windup(a);
-    const inWindow = toStrike <= duel.cfg.perfectEarlyMs + duel.mods.perfectWindowBonusMs;
+    const toWindow = toStrike - duel.perfectEarlyMs();
+    const inWindow = toWindow <= 0;
+    const k = Math.min(1, Math.max(0, toWindow / RING_LEAD_MS));
+    this.ring.scale.setScalar(RING_END_M + (RING_START_M - RING_END_M) * k);
+    this.ring.visible = toWindow < RING_LEAD_MS;
     const col = inWindow ? 0xffd34d : 0x7fe0ff;
     this.ghostMat.color.setHex(col);
-    this.zoneMat.color.setHex(col);
-    this.zoneFillMat.color.setHex(col);
-    this.ghostMat.opacity = 0.25 + 0.45 * p;
-    this.zoneMat.opacity = inWindow ? 0.95 : 0.35 + 0.3 * p;
-    this.zoneFillMat.opacity = inWindow ? 0.14 : 0.05;
+    this.ringMat.color.setHex(col);
+    this.ghostMat.opacity = inWindow ? 0.95 : 0.3 + 0.4 * p;
+    this.ringMat.opacity = inWindow ? 1 : 0.25 + 0.6 * (1 - k);
   }
 
   /** Show the swing path and "block here" ghost (on by default; ?guides=0 hides them). */
@@ -418,6 +418,14 @@ export class EnemyView {
       }
     }
     this.trail.update(this.trailClock);
+  }
+
+  /** World positions of the enemy blade's base and tip. */
+  bladeWorld(base: THREE.Vector3, tip: THREE.Vector3): void {
+    const blade = this.rigged?.blade ?? this.blade;
+    blade.updateWorldMatrix(true, false);
+    blade.localToWorld(base.set(0, 0, 0));
+    blade.localToWorld(tip.set(0, 1, 0));
   }
 
   /** Swept test: does the segment a->b (world) pass within `r` of the enemy body axis? */
@@ -527,7 +535,8 @@ export class EnemyView {
     DuelSpace.toLocal({ x: -0.3, y: top - 0.05, z: Dz }, this.hpBar.position);
     this.updatePips(e, space, Dz);
     this.hpBar.scale.set(Math.max(0.001, (0.6 * e.hp) / e.def.hp), 0.02, 1);
-    this.postureBar.visible = this.hpBar.visible = e.state !== 'dead';
+    // The labelled panel the game places above the head replaces these bars.
+    this.postureBar.visible = this.hpBar.visible = false;
 
     this.hitFlash = Math.max(0, this.hitFlash - dtMs / 150);
     this.bodyMat.emissive.setRGB(this.hitFlash * 0.8, this.hitFlash * 0.15, this.hitFlash * 0.1);
@@ -614,6 +623,18 @@ function placeSegment(mesh: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, 
 const d1 = new THREE.Vector3();
 const d2 = new THREE.Vector3();
 const rr = new THREE.Vector3();
+let segS = 0;
+let segT = 0;
+/** Midpoint of the closest approach between segments p1-q1 and p2-q2 (where two blades meet). */
+export function contactPoint(p1: THREE.Vector3, q1: THREE.Vector3, p2: THREE.Vector3, q2: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  segSegDist(p1, q1, p2, q2);
+  const a = out.copy(p1).lerp(q1, segS);
+  const bx = p2.x + (q2.x - p2.x) * segT;
+  const by = p2.y + (q2.y - p2.y) * segT;
+  const bz = p2.z + (q2.z - p2.z) * segT;
+  return a.set((a.x + bx) / 2, (a.y + by) / 2, (a.z + bz) / 2);
+}
+
 /** Closest distance between segments p1-q1 and p2-q2. */
 export function segSegDist(p1: THREE.Vector3, q1: THREE.Vector3, p2: THREE.Vector3, q2: THREE.Vector3): number {
   d1.subVectors(q1, p1);
@@ -636,6 +657,8 @@ export function segSegDist(p1: THREE.Vector3, q1: THREE.Vector3, p2: THREE.Vecto
     t = 1;
     s = THREE.MathUtils.clamp((b - c) / a, 0, 1);
   }
+  segS = s;
+  segT = t;
   const cx = p1.x + d1.x * s - (p2.x + d2.x * t);
   const cy = p1.y + d1.y * s - (p2.y + d2.y * t);
   const cz = p1.z + d1.z * s - (p2.z + d2.z * t);
