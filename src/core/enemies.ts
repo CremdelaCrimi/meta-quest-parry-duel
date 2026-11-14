@@ -16,14 +16,24 @@ const atk = (
   ...extra,
 });
 
+const quick = { damage: 9, postureDamage: 12, recoverMs: 450 } as const;
+
 export const ATTACKS = {
-  slashHigh: atk('slashHigh', 'high', 650),
-  slashLeft: atk('slashLeft', 'left', 600),
-  slashRight: atk('slashRight', 'right', 600),
+  // Vertical: overhead chop. Guard high (sword flat above your head).
+  slashHigh: atk('slashHigh', 'high', 650, { swing: 'vertical' }),
+  heavyHigh: atk('heavyHigh', 'high', 950, { swing: 'vertical', damage: 24, postureDamage: 34, recoverMs: 900 }),
+  // Horizontal: level sweep. Guard on that side (sword upright).
+  slashLeft: atk('slashLeft', 'left', 600, { swing: 'horizontal' }),
+  slashRight: atk('slashRight', 'right', 600, { swing: 'horizontal' }),
+  quickLeft: atk('quickLeft', 'left', 380, { swing: 'horizontal', ...quick }),
+  quickRight: atk('quickRight', 'right', 380, { swing: 'horizontal', ...quick }),
+  // Diagonal: from a raised shoulder down across. Guard on that side (sword upright).
+  diagLeft: atk('diagLeft', 'left', 620, { swing: 'diagonal' }),
+  diagRight: atk('diagRight', 'right', 620, { swing: 'diagonal' }),
+  quickDiagLeft: atk('quickDiagLeft', 'left', 400, { swing: 'diagonal', ...quick }),
+  quickDiagRight: atk('quickDiagRight', 'right', 400, { swing: 'diagonal', ...quick }),
+  // Not used by the current enemies (kept for later): low cut and the must-dodge attacks.
   slashLow: atk('slashLow', 'low', 620),
-  quickLeft: atk('quickLeft', 'left', 380, { damage: 9, postureDamage: 12, recoverMs: 450 }),
-  quickRight: atk('quickRight', 'right', 380, { damage: 9, postureDamage: 12, recoverMs: 450 }),
-  heavyHigh: atk('heavyHigh', 'high', 950, { damage: 24, postureDamage: 34, recoverMs: 900 }),
   thrust: atk('thrust', 'high', 900, { perilous: 'thrust', damage: 26, postureDamage: 0, recoverMs: 900 }),
   sweep: atk('sweep', 'high', 900, { perilous: 'sweep', damage: 26, postureDamage: 0, recoverMs: 900 }),
 } satisfies Record<string, AttackDef>;
@@ -46,13 +56,29 @@ function patterns(
     const list = strings[len];
     for (const attacks of list) {
       const steps: ComboStep[] = attacks.map((attack) => ({ attack, chainDelayMs: beatMs }));
-      out.push({ weight: weights[len - 1] / list.length, steps });
+      if (weights[len - 1] > 0) out.push({ weight: weights[len - 1] / list.length, steps });
     }
   }
   return out;
 }
 
+// Every enemy uses only the three swing shapes (vertical, horizontal, diagonal) for now.
+// Low cuts and the must-dodge thrust/sweep come back once the basics read clearly.
 export const ENEMIES: EnemyDef[] = [
+  {
+    name: 'Trainer',
+    hp: 40,
+    postureMax: 80,
+    // Everything ~1.6x slower, one swing at a time, long pauses: learn each shape and its block.
+    speed: 0.62,
+    idleMinMs: 1500,
+    idleMaxMs: 2300,
+    combos: patterns(400, [1, 0, 0], {
+      1: [[A.slashHigh], [A.slashLeft], [A.slashRight], [A.diagLeft], [A.diagRight]],
+      2: [],
+      3: [],
+    }),
+  },
   {
     name: 'Ronin',
     hp: 60,
@@ -60,10 +86,10 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1,
     idleMinMs: 900,
     idleMaxMs: 1600,
-    // Mostly singles while you learn the sides; slow, even beat.
+    // Mostly singles; slow, even beat.
     combos: patterns(320, [5, 3, 1], {
-      1: [[A.slashLeft], [A.slashRight], [A.slashHigh]],
-      2: [[A.slashLeft, A.slashRight], [A.slashHigh, A.slashLow]],
+      1: [[A.slashHigh], [A.slashLeft], [A.slashRight], [A.diagLeft], [A.diagRight]],
+      2: [[A.slashLeft, A.slashRight], [A.diagRight, A.diagLeft], [A.slashHigh, A.slashLeft]],
       3: [[A.slashLeft, A.slashRight, A.heavyHigh]],
     }),
   },
@@ -74,12 +100,12 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1.1,
     idleMinMs: 700,
     idleMaxMs: 1300,
-    combos: patterns(230, [2, 3, 3], {
-      1: [[A.thrust], [A.heavyHigh]],
-      2: [[A.slashRight, A.slashLow], [A.quickLeft, A.quickRight]],
+    combos: patterns(260, [2, 3, 3], {
+      1: [[A.heavyHigh], [A.diagLeft]],
+      2: [[A.quickLeft, A.quickRight], [A.diagLeft, A.slashHigh]],
       3: [
         [A.quickLeft, A.quickRight, A.slashHigh],
-        [A.slashLeft, A.slashLeft, A.slashRight],
+        [A.diagRight, A.diagLeft, A.slashRight],
       ],
     }),
   },
@@ -90,14 +116,14 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1.15,
     idleMinMs: 600,
     idleMaxMs: 1100,
-    // Fast beat, mostly 3-hit strings that end in something you must dodge or a heavy.
-    combos: patterns(180, [2, 3, 4], {
-      1: [[A.sweep], [A.thrust]],
-      2: [[A.slashLow, A.sweep], [A.quickRight, A.thrust]],
+    // Fast beat, mostly 3-hit strings ending in a heavy.
+    combos: patterns(200, [2, 3, 4], {
+      1: [[A.heavyHigh], [A.diagRight]],
+      2: [[A.quickDiagLeft, A.quickDiagRight], [A.quickRight, A.heavyHigh]],
       3: [
-        [A.quickRight, A.quickLeft, A.thrust],
-        [A.slashHigh, A.quickLeft, A.heavyHigh],
-        [A.slashLow, A.slashLeft, A.sweep],
+        [A.quickRight, A.quickLeft, A.heavyHigh],
+        [A.quickDiagLeft, A.quickDiagRight, A.slashHigh],
+        [A.slashHigh, A.quickLeft, A.diagRight],
       ],
     }),
   },

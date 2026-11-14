@@ -47,11 +47,13 @@ export class Run {
     this.rng = new Rng(seed);
   }
 
-  /** Enemies cycle; each loop through the list gets faster and tougher. */
+  /** First pass goes through every enemy (Trainer first); later loops skip the Trainer and get faster and tougher. */
   enemyForFight(): EnemyDef {
-    const base = ENEMIES[this.fight % ENEMIES.length];
-    const loop = Math.floor(this.fight / ENEMIES.length);
-    if (loop === 0) return base;
+    if (this.fight < ENEMIES.length) return ENEMIES[this.fight];
+    const pool = ENEMIES.slice(1);
+    const n = this.fight - ENEMIES.length;
+    const base = pool[n % pool.length];
+    const loop = 1 + Math.floor(n / pool.length);
     return { ...base, name: `${base.name} +${loop}`, speed: base.speed + 0.1 * loop, hp: Math.round(base.hp * (1 + 0.25 * loop)) };
   }
 

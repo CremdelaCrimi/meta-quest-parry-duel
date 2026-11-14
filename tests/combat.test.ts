@@ -360,6 +360,21 @@ describe('roguelite run', () => {
     for (let i = 0; i < 20; i++) expect(run.offer().some((p) => p.id === 'ward')).toBe(false);
   });
 
+  it('starts with the Trainer and only uses the three swing shapes', () => {
+    const run = new Run(1);
+    expect(run.enemyForFight().name).toBe('Trainer');
+    for (const e of ENEMIES) {
+      for (const c of e.combos) {
+        for (const s of c.steps) {
+          expect(s.attack.perilous).toBe('none');
+          expect(['vertical', 'horizontal', 'diagonal']).toContain(s.attack.swing);
+        }
+      }
+    }
+    run.fight = ENEMIES.length;
+    expect(run.enemyForFight().name).not.toContain('Trainer');
+  });
+
   it('later loops make enemies faster', () => {
     const run = new Run(1);
     run.fight = ENEMIES.length;

@@ -24,10 +24,18 @@ export type Perilous = 'none' | 'thrust' | 'sweep';
 
 export type DodgeKind = 'leanLeft' | 'leanRight' | 'duck';
 
+/**
+ * The shape of a swing, for readability only (the sim judges by `dir`):
+ * vertical = overhead chop (lands high), horizontal = level sweep from one side,
+ * diagonal = from a raised shoulder down across (both land on that side).
+ */
+export type Swing = 'vertical' | 'horizontal' | 'diagonal';
+
 export interface AttackDef {
   id: string;
   dir: Dir;
   perilous: Perilous;
+  swing?: Swing;
   /** Time from attack start to the strike instant. This is the telegraph. */
   windupMs: number;
   /** Time after the strike before the enemy can act again (if no combo follow-up). */

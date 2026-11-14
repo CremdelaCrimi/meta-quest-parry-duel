@@ -98,3 +98,11 @@ renderer.setAnimationLoop((time: number, frame?: XRFrame) => {
 
 // Handy for tuning from the console (desktop, or Quest via remote debugging).
 (window as unknown as { game: Game }).game = game;
+// Dev only: step and draw one frame by hand (screenshots while the page isn't animating).
+if (import.meta.env.DEV) {
+  (window as unknown as { __step: (t: number) => void }).__step = (t: number) => {
+    renderer.setAnimationLoop(null); // manual stepping owns the clock from here on
+    game.frame(t);
+    renderer.render(scene, camera);
+  };
+}

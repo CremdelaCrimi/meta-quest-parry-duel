@@ -9,14 +9,23 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
   A/D lean, S duck, Q/E abilities, 1–3 pick boon, P preset, R recalibrate.
 
 ## Controls (Quest)
+There is no block or attack button: the sword does both. A how-to-play panel sits on your right
+before the run and through the first fight (the Trainer: slow, one swing at a time).
+
 | Input | Action |
 |---|---|
-| Right hand | Sword. Guard on the side the attack lands (left / right / overhead / low) |
-| Swing into enemy | Strike (counter after a perfect parry; finisher when posture breaks) |
-| Lean left/right | Dodge — required for **thrusts** (red ring) |
-| Duck | Dodge — required for **sweeps** (red ring) |
+| Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
+| Swing into enemy | **Strike** (counter after a perfect parry; finisher when posture breaks) |
+| Lean / duck | Dodge. Not needed yet: the current enemies only use blockable swings |
 | Left trigger / grip | Time Sigil / Ward (once picked up) |
-| A / B / Y | Hide panel / recalibrate / switch timing preset |
+| Right trigger | Start / confirm |
+| A / B / Y | Hide panels / re-center / switch timing preset |
+
+Three swing shapes, each named above the enemy as it winds up:
+**vertical** (chop down: sword flat above your head), **horizontal** (level sweep from one side:
+sword upright on that side), **diagonal** (down from a raised shoulder: sword upright on that side).
+Your HP and posture are on the strip under the enemy; a hit flashes the view red.
+`?guides=0` hides the swing path and block box once you know the moves.
 
 ## Tuning
 All feel values live in `src/core/config.ts`. Any of them can be overridden from the URL without a rebuild,
@@ -34,7 +43,10 @@ tally. Tune with `?steadyMs=50&steadyMaxSpeed=1.2` (m/s at the blade tip; `stead
 Enemies attack in 1-, 2- and 3-hit strings with a fixed rhythm per enemy (`src/core/enemies.ts`);
 pips above the head show the string length. Each swing leaves a fading trail so you can learn its path.
 
-## Enemy model (`?enemy=procedural` for the old one)
+## Enemy model
+The default enemy is the simple built-in swordsman (`src/render/views.ts`): each swing is a
+windup pose, a middle control point and a strike pose, swept along a curve so impact lands on the
+sim's strike instant. `?enemy=rigged` loads the experimental model instead:
 `public/enemy/` holds a Tripo-generated, Mixamo-rigged swordsman (`swordsman.glb`, ~2 MB, 10 clips)
 and `enemy.json`, which maps each sim attack to a clip plus its release/impact marks. The game scrubs
 each clip from the enemy clock so impact always lands on the sim's strike instant (`src/render/clipTiming.ts`).

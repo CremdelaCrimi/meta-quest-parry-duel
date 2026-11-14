@@ -86,22 +86,95 @@ export class SwordView {
 type Key = [number, number, number, number, number, number]; // hilt xyz, tip xyz (core duel frame)
 const key = (k: Key): SwordPose => ({ hilt: { x: k[0], y: k[1], z: k[2] }, tip: { x: k[3], y: k[4], z: k[5] } });
 
-// Enemy sword key poses, in the player's duel frame (head = origin, +z toward enemy).
-// "strike" poses put the blade exactly where the player's matching guard sits.
+// Enemy sword key poses, in the player's duel frame (head = origin, +z toward enemy, +x = player's right).
+// A swing is a curve: windup (raised, held as the telegraph) -> mid (control point that bends the
+// path into an arc) -> strike (blade crossing exactly where the player's matching guard sits).
+type SwingKeys = { windup: SwordPose; mid: SwordPose; strike: SwordPose };
 const REST = key([0.0, -0.55, D - 0.45, 0.05, -0.35, D - 1.2]);
 const STAGGER = key([0.15, -0.95, D - 0.3, 0.35, -1.4, D - 0.6]);
-const KEYS: Record<string, { windup: SwordPose; strike: SwordPose }> = {
-  left: { windup: key([-0.45, 0.05, D - 0.2, -0.9, 0.45, D + 0.15]), strike: key([-0.6, -0.15, 1.0, -0.25, -0.1, 0.2]) },
-  right: { windup: key([0.45, 0.05, D - 0.2, 0.9, 0.45, D + 0.15]), strike: key([0.6, -0.15, 1.0, 0.25, -0.1, 0.2]) },
-  high: { windup: key([0.05, 0.35, D - 0.15, 0.05, 0.95, D + 0.3]), strike: key([0.0, 0.12, 1.0, 0.0, 0.05, 0.2]) },
-  low: { windup: key([0.4, -0.65, D - 0.2, 0.85, -0.9, D + 0.25]), strike: key([0.45, -0.8, 1.0, -0.15, -0.95, 0.3]) },
-  thrust: { windup: key([0.2, -0.3, D + 0.15, 0.2, -0.22, D - 0.6]), strike: key([0.05, -0.2, 0.85, 0.0, -0.1, 0.0]) },
-  sweep: { windup: key([0.6, 0.05, D - 0.25, 1.15, 0.15, D + 0.1]), strike: key([-0.35, 0.02, 0.95, -0.7, 0.02, 0.1]) },
-};
-const kindOf = (a: AttackDef) => (a.perilous !== 'none' ? a.perilous : a.dir);
+const mirror = (k: Key): Key => [-k[0], k[1], k[2], -k[3], k[4], k[5]];
+const keys = (w: Key, m: Key, s: Key): SwingKeys => ({ windup: key(w), mid: key(m), strike: key(s) });
+const both = (name: string, w: Key, m: Key, s: Key) => ({
+  [`${name}-left`]: keys(w, m, s),
+  [`${name}-right`]: keys(mirror(w), mirror(m), mirror(s)),
+});
+const straight = (w: Key, s: Key): SwingKeys => keys(w, w.map((v, i) => (v + s[i]) / 2) as Key, s);
 
-/** Real-time duration of the final committed swing (enemy-clock ms). */
-const SWING_MS = 140;
+const KEYS: Record<string, SwingKeys> = {
+  // Vertical: sword straight up and back, then chops down onto your head.
+  'vertical-high': keys([0, 0.35, D - 0.25, 0, 1.05, D + 0.1], [0, 0.55, D - 0.6, 0, 0.75, D - 1.35], [0, 0.18, 1.0, 0, 0.05, 0.2]),
+  // Horizontal: sword pulled back wide at chest height, sweeps level in from that side.
+  ...both('horizontal', [-0.5, -0.15, D - 0.15, -1.15, -0.1, D + 0.25], [-0.7, -0.2, D - 0.4, -1.45, -0.22, D - 0.95], [-0.7, -0.25, 1.0, -0.15, -0.25, 0.3]),
+  // Diagonal: sword raised over that shoulder, cuts down and across.
+  ...both('diagonal', [-0.45, 0.35, D - 0.2, -0.95, 0.95, D + 0.15], [-0.65, 0.35, D - 0.5, -1.2, 0.55, D - 1.1], [-0.65, 0.05, 1.0, -0.12, -0.4, 0.3]),
+  // Not used by the current enemies.
+  low: straight([0.4, -0.65, D - 0.2, 0.85, -0.9, D + 0.25], [0.45, -0.8, 1.0, -0.15, -0.95, 0.3]),
+  thrust: straight([0.2, -0.3, D + 0.15, 0.2, -0.22, D - 0.6], [0.05, -0.2, 0.85, 0.0, -0.1, 0.0]),
+  sweep: straight([0.6, 0.05, D - 0.25, 1.15, 0.15, D + 0.1], [-0.35, 0.02, 0.95, -0.7, 0.02, 0.1]),
+};
+
+/** Which keyframe set an attack uses. */
+export function kindOf(a: AttackDef): string {
+  if (a.perilous !== 'none') return a.perilous;
+  if (a.dir === 'low') return 'low';
+  const swing = a.swing ?? (a.dir === 'high' ? 'vertical' : 'horizontal');
+  return a.dir === 'high' ? 'vertical-high' : `${swing === 'vertical' ? 'horizontal' : swing}-${a.dir}`;
+}
+
+/**
+ * Where the player should hold the sword (right hand) to block each direction, relative to the
+ * head. These are textbook poses for classifyGuard: flat overhead, or upright on that side.
+ */
+const GUARD_GHOST: Record<string, SwordPose> = {
+  high: key([0.3, 0.15, 0.38, -0.45, 0.2, 0.38]), // above the forehead, not across the eyes
+  left: key([-0.3, -0.55, 0.35, -0.3, 0.2, 0.4]),
+  right: key([0.32, -0.55, 0.35, 0.32, 0.2, 0.4]),
+  low: key([0.2, -0.85, 0.3, 0.1, -1.05, 0.7]),
+};
+/** Hit zone around each guard (m): the box the swing cuts through. */
+const ZONE_SIZE: Record<string, [number, number, number]> = {
+  high: [0.95, 0.28, 0.4],
+  left: [0.34, 0.95, 0.4],
+  right: [0.34, 0.95, 0.4],
+  low: [0.5, 0.4, 0.5],
+};
+
+/** Enemy blade length (m); interpolated poses are renormalised so the sword never stretches. */
+const ENEMY_BLADE_M = 0.85;
+/** Duration of the committed swing (enemy-clock ms). Long enough to follow by eye, capped at half the windup. */
+const SWING_MS = 320;
+
+/**
+ * Swing progress 0..1 (linear in time) -> how far along the arc the blade is (0..1).
+ * Shapes how the swing reads: linear looks robotic, a strong ease-in looks like a snap.
+ */
+function swingEase(f: number): number {
+  // TODO(human): shape the swing. f = 0 is the end of the telegraph, f = 1 is impact.
+  return f * f;
+}
+
+/** Pose along a swing's arc: quadratic Bezier through windup -> (mid) -> strike, fixed blade length. */
+function swingPose(out: SwordPose, k: SwingKeys, f: number): SwordPose {
+  bez3(out.hilt, k.windup.hilt, k.mid.hilt, k.strike.hilt, f);
+  bez3(out.tip, k.windup.tip, k.mid.tip, k.strike.tip, f);
+  return fixLength(out, ENEMY_BLADE_M);
+}
+function bez3(o: V3, a: V3, m: V3, b: V3, t: number): void {
+  const u = 1 - t;
+  o.x = u * u * a.x + 2 * u * t * m.x + t * t * b.x;
+  o.y = u * u * a.y + 2 * u * t * m.y + t * t * b.y;
+  o.z = u * u * a.z + 2 * u * t * m.z + t * t * b.z;
+}
+function fixLength(p: SwordPose, len: number): SwordPose {
+  const dx = p.tip.x - p.hilt.x;
+  const dy = p.tip.y - p.hilt.y;
+  const dz = p.tip.z - p.hilt.z;
+  const s = len / Math.max(1e-6, Math.hypot(dx, dy, dz));
+  p.tip.x = p.hilt.x + dx * s;
+  p.tip.y = p.hilt.y + dy * s;
+  p.tip.z = p.hilt.z + dz * s;
+  return p;
+}
 
 function lerpPoseInto(out: SwordPose, a: SwordPose, b: SwordPose, t: number): void {
   lerp3(out.hilt, a.hilt, b.hilt, t);
@@ -180,8 +253,107 @@ export class EnemyView {
       b.rotation.y = Math.PI; // face the player
       this.root.add(b);
     }
+
+    // "Block here": a ghost sword at the guard the current attack needs, inside its hit zone.
+    const ghostGeo = new THREE.BoxGeometry(0.03, 1, 0.06);
+    ghostGeo.translate(0, 0.5, 0);
+    this.ghost = new THREE.Mesh(ghostGeo, this.ghostMat);
+    this.zone = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), this.zoneMat);
+    this.zoneFill = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.zoneFillMat);
+    this.pathMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.pathMat);
+    this.pathMesh.frustumCulled = false;
+    for (const o of [this.ghost, this.zone, this.zoneFill, this.pathMesh]) {
+      o.renderOrder = 15; // after the HUD panels (10), which don't write depth, so guides are never hidden
+      o.visible = false;
+      this.root.add(o);
+    }
     copyPose(this.pose, REST);
   }
+
+  private readonly ghostMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
+  private readonly zoneMat = new THREE.LineBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.6, depthWrite: false });
+  private readonly zoneFillMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide });
+  private readonly pathMat = new THREE.MeshBasicMaterial({ color: 0xbfe0ff, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+  private readonly ghost: THREE.Mesh;
+  private readonly zone: THREE.LineSegments;
+  private readonly zoneFill: THREE.Mesh;
+  private readonly pathMesh: THREE.Mesh;
+  private readonly pathGeos = new Map<string, THREE.BufferGeometry>();
+  private readonly ghostPose: SwordPose = key([0, 0, 0, 0, 0, 0]);
+
+  /** The swept surface of a swing (hilt-to-tip ribbon along its arc), built once per kind. */
+  private pathGeo(kind: string): THREE.BufferGeometry {
+    let g = this.pathGeos.get(kind);
+    if (g) return g;
+    const N = 24;
+    const pos = new Float32Array((N + 1) * 2 * 3);
+    const p = key([0, 0, 0, 0, 0, 0]);
+    for (let i = 0; i <= N; i++) {
+      swingPose(p, KEYS[kind], i / N);
+      // Inner edge at 35% of the blade (where it leaves the hand), outer at the tip.
+      lerp3(this.tmpV3, p.hilt, p.tip, 0.35);
+      DuelSpace.toLocal(this.tmpV3, this.v1).toArray(pos, i * 6);
+      DuelSpace.toLocal(p.tip, this.v1).toArray(pos, i * 6 + 3);
+    }
+    const idx: number[] = [];
+    for (let i = 0; i < N; i++) idx.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+    g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    this.pathGeos.set(kind, g);
+    return g;
+  }
+  private readonly tmpV3: V3 = { x: 0, y: 0, z: 0 };
+
+  /**
+   * Telegraph aids for the current attack: the swing's path (faint, brightening), and where to
+   * block it (ghost sword in a hit-zone box). The box turns gold during the perfect-parry window,
+   * i.e. when your guard should arrive. Hidden for must-dodge attacks.
+   */
+  private updateGuide(duel: Duel, head: V3): void {
+    const att = duel.currentAttack;
+    const e = duel.enemy;
+    const on = !!att && e.state === 'attack' && !e.struck && this.guides;
+    const block = on && att!.perilous === 'none';
+    this.pathMesh.visible = on;
+    this.ghost.visible = this.zone.visible = this.zoneFill.visible = block;
+    if (!on) return;
+    const a = att!;
+    const p = Math.min(1, Math.max(0, duel.attackProgress()));
+    this.pathMesh.geometry = this.pathGeo(kindOf(a));
+    this.pathMat.color.setHex(a.perilous !== 'none' ? 0xff3030 : 0xbfe0ff);
+    this.pathMat.opacity = 0.05 + 0.2 * p * p;
+    if (!block) return;
+
+    // Ghost follows the head (guards are judged relative to it).
+    const g = GUARD_GHOST[a.dir];
+    const gp = this.ghostPose;
+    copyPose(gp, g);
+    for (const v of [gp.hilt, gp.tip]) {
+      v.x += head.x;
+      v.z += head.z;
+    }
+    placeSegment(this.ghost, DuelSpace.toLocal(gp.hilt, this.v1), DuelSpace.toLocal(gp.tip, this.v2), this.v3);
+    this.ghost.scale.x = this.ghost.scale.z = 1;
+    lerp3(this.tmpV3, gp.hilt, gp.tip, 0.5);
+    for (const o of [this.zone, this.zoneFill]) {
+      DuelSpace.toLocal(this.tmpV3, o.position);
+      o.scale.set(...ZONE_SIZE[a.dir]);
+    }
+    // Gold from the start of the perfect window to the strike: be in place and still by then.
+    const toStrike = (1 - p) * duel.windup(a);
+    const inWindow = toStrike <= duel.cfg.perfectEarlyMs + duel.mods.perfectWindowBonusMs;
+    const col = inWindow ? 0xffd34d : 0x7fe0ff;
+    this.ghostMat.color.setHex(col);
+    this.zoneMat.color.setHex(col);
+    this.zoneFillMat.color.setHex(col);
+    this.ghostMat.opacity = 0.25 + 0.45 * p;
+    this.zoneMat.opacity = inWindow ? 0.95 : 0.35 + 0.3 * p;
+    this.zoneFillMat.opacity = inWindow ? 0.14 : 0.05;
+  }
+
+  /** Show the swing path and "block here" ghost (on by default; ?guides=0 hides them). */
+  guides = true;
 
   reset(): void {
     copyPose(this.pose, REST);
@@ -269,7 +441,8 @@ export class EnemyView {
     this.lunge += (target - this.lunge) * (1 - Math.exp((-7 * animMs) / 1000));
   }
 
-  update(duel: Duel, space: DuelSpace, dtMs: number): void {
+  /** `head` is the player's head offset from the duel centre (duel frame), so guides track a lean. */
+  update(duel: Duel, space: DuelSpace, dtMs: number, head: V3 = { x: 0, y: 0, z: 0 }): void {
     const e = duel.enemy;
     const att = duel.currentAttack;
     const p = duel.attackProgress();
@@ -294,11 +467,11 @@ export class EnemyView {
       this.body.rotation.x = 0;
       if (att) {
         const k = KEYS[kindOf(att)];
-        const swingFrac = Math.min(0.45, SWING_MS / duel.windup(att));
+        const swingFrac = Math.min(0.5, SWING_MS / duel.windup(att));
         if (!e.struck && p >= 1 - swingFrac) {
-          // Committed swing: keyed exactly so the blade arrives on the strike instant.
+          // Committed swing along the arc, timed so the blade arrives on the strike instant.
           const f = Math.min(1, (p - (1 - swingFrac)) / swingFrac);
-          lerpPoseInto(this.pose, k.windup, k.strike, f * f);
+          swingPose(this.pose, k, swingEase(f));
           swing = true;
         } else if (!e.struck) {
           copyPose(this.target, k.windup);
@@ -310,6 +483,7 @@ export class EnemyView {
       }
     }
     if (!swing) {
+      fixLength(this.target, ENEMY_BLADE_M); // same length as the swing, so it never pops
       const rate = e.state === 'attack' && !e.struck ? 9 : 6;
       lerpPoseInto(this.pose, this.pose, this.target, 1 - Math.exp((-rate * animMs) / 1000));
     }
@@ -363,6 +537,7 @@ export class EnemyView {
       this.rigged.update(duel, animMs, this.hitFlash);
     }
     this.updateTrail(duel, dtMs);
+    this.updateGuide(duel, head);
   }
 }
 

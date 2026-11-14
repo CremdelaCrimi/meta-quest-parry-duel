@@ -5,7 +5,7 @@ import { makePose } from './core/guard';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel } from './core/sim';
-import type { AbilityId, DuelEvent, Fault, SwordPose, TimingConfig, V3 } from './core/types';
+import type { AbilityId, AttackDef, DuelEvent, Fault, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Sparks, SwordView } from './render/views';
@@ -63,6 +63,21 @@ export class Game {
   readonly sparks = new Sparks();
   private readonly hud = new CanvasPanel(1024, 720, 0.75);
   private readonly banner = new CanvasPanel(1024, 256, 1.1);
+  /** How to play: shown before the run and through the Trainer fight. */
+  private readonly help = new CanvasPanel(1024, 880, 0.8);
+  private helpXR = false;
+  /** Your HP/posture and the enemy's, low and centred so it's always in view. */
+  private readonly status = new CanvasPanel(1024, 200, 0.7);
+  /** Names the incoming swing and how to block it, above the enemy. */
+  private readonly callout = new CanvasPanel(1024, 170, 0.75);
+  private calloutKey = '';
+  private statusAt = 0;
+  /** Red flash around the head when you take a hit. */
+  private readonly hurt = new THREE.Mesh(
+    new THREE.SphereGeometry(0.3, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false }),
+  );
+  private hurtT = 0;
   private readonly cards = [0, 1, 2].map(() => new CanvasPanel(512, 640, 0.3));
   private offers: Pickup[] = [];
   private hover = -1;
@@ -100,15 +115,23 @@ export class Game {
     this.space.group.rotation.y = Math.PI;
     this.space.group.updateMatrixWorld(true);
 
-    scene.add(this.space.group, this.sparks.points);
-    this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh);
+    scene.add(this.space.group, this.sparks.points, this.hurt);
+    this.hurt.renderOrder = 20;
+    this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh, this.help.mesh, this.status.mesh, this.callout.mesh);
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this; // console tuning
-    // The rigged swordsman from public/enemy/ is the default; ?enemy=procedural keeps the built-in one.
-    if (new URLSearchParams(location.search).get('enemy') !== 'procedural') void this.enemyView.useRigged('./enemy/enemy.json');
+    // The simple built-in swordsman is the default; ?enemy=rigged loads the Tripo/Mixamo model from public/enemy/.
+    const q = new URLSearchParams(location.search);
+    if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
+    this.enemyView.guides = q.get('guides') !== '0';
     for (const c of this.cards) this.space.group.add(c.mesh);
 
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });
     place(this.banner.mesh, { x: 0, y: 0.5, z: 1.4 });
+    place(this.help.mesh, { x: 1.1, y: 0.0, z: 1.1 });
+    place(this.status.mesh, { x: 0, y: -0.68, z: 1.2 });
+    place(this.callout.mesh, { x: 0, y: 0.68, z: 1.6 });
+    this.callout.mesh.visible = false;
+    this.drawHelp();
     this.cards.forEach((c, i) => place(c.mesh, { x: (i - 1) * 0.36, y: -0.35, z: 0.75 }));
 
     // ?preset=1 (Lies of P-like), ?preset=2 (Easy). Startup only, so P still cycles through all.
@@ -142,6 +165,14 @@ export class Game {
       this.hudOn = !this.hudOn;
       this.hud.mesh.visible = this.hudOn;
     }
+    if (this.helpXR !== this.isXR) {
+      // Entered or left the headset: controller wording vs mouse/keyboard wording.
+      this.helpXR = this.isXR;
+      this.drawHelp();
+      if (this.phase === 'calibrate') this.setPhase('calibrate', t);
+    }
+    // How-to-play stays up before the run and through the Trainer; A hides it with the stats.
+    this.help.mesh.visible = this.hudOn && (this.phase === 'calibrate' || this.run.fight === 0);
 
     switch (this.phase) {
       case 'calibrate':
@@ -165,9 +196,19 @@ export class Game {
         break;
     }
 
-    this.enemyView.update(this.duel, this.space, dt);
+    this.enemyView.update(this.duel, this.space, dt, this.headCurr);
     this.sword.update(dt);
     this.sparks.update(dt);
+    this.updateCallout();
+    this.hurtT = Math.max(0, this.hurtT - dt / 450);
+    this.hurt.position.copy(f.headPos);
+    (this.hurt.material as THREE.MeshBasicMaterial).opacity = 0.3 * this.hurtT;
+    this.hurt.visible = this.hurtT > 0;
+    this.status.mesh.visible = this.phase !== 'calibrate';
+    if (this.status.mesh.visible && t >= this.statusAt) {
+      this.drawStatus();
+      this.statusAt = t + 100;
+    }
     if (this.hudOn && t >= this.hudAt) {
       this.drawHud(t);
       this.hudAt = t + 100; // 10 Hz: texture uploads are not free on Quest
@@ -252,6 +293,8 @@ export class Game {
       }
       case 'hit': {
         this.sfx.play('hit');
+        this.hurtT = 1;
+        this.statusAt = 0;
         this.input.pulse('right', 1, 120);
         this.input.pulse('left', 1, 120);
         this.record(ev.offsetMs ?? 0, 'hit', ev.faults ?? []);
@@ -391,7 +434,7 @@ export class Game {
       this.showBanner(
         'PARRY DUEL',
         COLORS.info,
-        this.isXR ? 'Stand in your spot, face forward, pull RIGHT TRIGGER' : 'Click to begin. Mouse = guard, A/D lean, S duck',
+        this.isXR ? 'Read the panel on the right, face forward, pull RIGHT TRIGGER' : 'Read the panel on the right, then click to begin',
       );
     }
   }
@@ -545,6 +588,102 @@ export class Game {
     });
   }
 
+  /** Big, plain-language controls card. The sword does everything; buttons are only for menus. */
+  private drawHelp(): void {
+    const xr = this.isXR;
+    this.help.draw((ctx, w, h) => {
+      ctx.fillStyle = 'rgba(10,12,18,0.85)';
+      roundRect(ctx, 0, 0, w, h, 28);
+      ctx.fill();
+      let y = 70;
+      const line = (text: string, font: string, color: string, gap: number) => {
+        ctx.font = font;
+        ctx.fillStyle = color;
+        ctx.fillText(text, 40, y);
+        y += gap;
+      };
+      line('HOW TO PLAY', '800 54px system-ui, sans-serif', '#ffffff', 52);
+      line(xr ? 'No button to block or attack. Your sword does it.' : 'Your mouse is the sword. Nothing to press to block.', '500 30px system-ui, sans-serif', '#9aa3b0', 70);
+
+      line('BLOCK: put your sword in the glowing box', '700 36px system-ui, sans-serif', COLORS.block, 46);
+      line('A ghost sword shows where. Get there when the box turns', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line('GOLD, then hold still until the swing lands.', '500 29px system-ui, sans-serif', COLORS.perfect, 50);
+      line('↓  Vertical chop: sword flat above your head', '500 29px system-ui, sans-serif', '#d8dce4', 40);
+      line('→ ←  Horizontal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 40);
+      line('↘ ↙  Diagonal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 66);
+
+      line(xr ? 'ATTACK: swing your sword into his body' : 'ATTACK: click while he is open', '700 36px system-ui, sans-serif', '#ff8a5a', 44);
+      line('Hits hardest right after a perfect (gold) block.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
+
+      line('HEALTH: the bars under the enemy', '700 36px system-ui, sans-serif', COLORS.hit, 44);
+      line('Red = your HP. Orange = posture (fills when you block;', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line('full = guard broken). The screen flashes red when hit.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
+
+      line('DODGE: not needed yet (lean or duck, later)', '600 30px system-ui, sans-serif', '#9aa3b0', 60);
+      line(
+        xr ? 'Buttons: R trigger start · A hide panels · B re-center · Y difficulty' : 'Keys: H hide panels · R re-center · P difficulty · A/D lean · S duck',
+        '500 27px system-ui, sans-serif',
+        '#7c8594',
+        0,
+      );
+    });
+  }
+
+  /** Low, centred status strip: your HP and posture on the left, the enemy's on the right. */
+  private drawStatus(): void {
+    const d = this.duel;
+    const c = this.timing;
+    const e = d.enemy;
+    this.status.draw((ctx, w, h) => {
+      ctx.fillStyle = 'rgba(10,12,18,0.78)';
+      roundRect(ctx, 0, 0, w, h, 24);
+      ctx.fill();
+      const half = w / 2;
+      const side = (x: number, label: string, hp: number, hpMax: number, posture: number, postureMax: number) => {
+        ctx.font = '700 32px system-ui, sans-serif';
+        ctx.fillStyle = '#e8e8e8';
+        ctx.fillText(label, x, 48);
+        ctx.font = '600 28px system-ui, sans-serif';
+        ctx.fillStyle = COLORS.hit;
+        const hpText = `HP ${Math.max(0, Math.ceil(hp))}/${hpMax}`;
+        ctx.fillText(hpText, x + half - 60 - ctx.measureText(hpText).width, 48);
+        bar(ctx, x, 66, half - 60, 44, hp / hpMax, '#d04040');
+        ctx.fillStyle = '#9aa3b0';
+        ctx.font = '500 22px system-ui, sans-serif';
+        ctx.fillText('posture', x, 150);
+        bar(ctx, x + 90, 132, half - 150, 22, posture / postureMax, posture / postureMax > 0.75 ? '#ff5a1a' : '#ffb020');
+      };
+      side(30, 'YOU', d.player.hp, d.player.hpMax, d.player.posture, c.playerPostureMax);
+      side(half + 30, e.def.name.toUpperCase(), e.hp, e.def.hp, e.posture, e.def.postureMax);
+    });
+  }
+
+  /** Name the incoming swing and how to block it, once per attack. */
+  private updateCallout(): void {
+    const d = this.duel;
+    const att = d.currentAttack;
+    const e = d.enemy;
+    const show = this.phase === 'fight' && !!att && e.state === 'attack' && !e.struck;
+    const k = show ? `${att!.id}@${e.attackStart}` : '';
+    this.callout.mesh.visible = show;
+    if (!show || k === this.calloutKey) return;
+    this.calloutKey = k;
+    const [title, how, color] = calloutFor(att!);
+    this.callout.draw((ctx, w) => {
+      ctx.fillStyle = 'rgba(10,12,18,0.75)';
+      roundRect(ctx, 0, 0, w, 170, 24);
+      ctx.fill();
+      ctx.textAlign = 'center';
+      ctx.font = '800 60px system-ui, sans-serif';
+      ctx.fillStyle = color;
+      ctx.fillText(title, w / 2, 72);
+      ctx.font = '600 40px system-ui, sans-serif';
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fillText(how, w / 2, 134);
+      ctx.textAlign = 'left';
+    });
+  }
+
   private showBanner(title: string, color: string, sub: string): void {
     this.banner.mesh.visible = true;
     this.banner.draw((ctx, w, h) => {
@@ -600,6 +739,18 @@ function place(mesh: THREE.Object3D, v: V3): void {
 function copyPose(o: SwordPose, a: SwordPose): void {
   Object.assign(o.hilt, a.hilt);
   Object.assign(o.tip, a.tip);
+}
+
+/** [title, how to block, colour] for an attack's callout. Left/right = the side of YOU it lands on. */
+function calloutFor(a: AttackDef): [string, string, string] {
+  if (a.perilous === 'thrust') return ['THRUST', 'Lean left or right!', COLORS.hit];
+  if (a.perilous === 'sweep') return ['SWEEP', 'Duck!', COLORS.hit];
+  if (a.dir === 'high') return ['↓  VERTICAL', 'Block: sword flat above your head', COLORS.info];
+  if (a.dir === 'low') return ['LOW CUT', 'Block: sword low, tip down', COLORS.info];
+  const side = a.dir === 'left' ? 'LEFT' : 'RIGHT';
+  const arrow = a.swing === 'diagonal' ? (a.dir === 'left' ? '↘' : '↙') : a.dir === 'left' ? '→' : '←';
+  const name = a.swing === 'diagonal' ? 'DIAGONAL' : 'HORIZONTAL';
+  return [`${arrow}  ${name} from your ${side}`, `Block: sword upright on your ${side.toLowerCase()}`, COLORS.info];
 }
 
 /** Faults as words, e.g. "angle + not held". Timing is left to fmt(), which says early/late. */
