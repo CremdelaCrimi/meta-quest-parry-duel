@@ -24,6 +24,11 @@ export type Perilous = 'none' | 'thrust' | 'sweep';
 
 export type DodgeKind = 'leanLeft' | 'leanRight' | 'duck';
 
+/** Where the player's strike met the enemy's body, from the player's view. */
+export type StrikeZone = 'left' | 'right' | 'center';
+/** Side the idle enemy holds his sword on (player's view). The other side is his opening. */
+export type GuardSide = 'left' | 'right';
+
 /**
  * The shape of a swing, for readability only (the sim judges by `dir`):
  * vertical = overhead chop (lands high), horizontal = level sweep from one side,
@@ -129,6 +134,11 @@ export interface TimingConfig {
 
   playerDamage: number;
   playerPostureDamageOnBlocked: number;
+  /** A poke (thrust along the blade) into a guard deals this much more posture than a slash. */
+  pokePostureMult: number;
+  /** While idle the enemy guards one side and moves his guard every guardShiftMin..MaxMs. */
+  guardShiftMinMs: number;
+  guardShiftMaxMs: number;
   finisherDamage: number;
 }
 
@@ -156,6 +166,9 @@ export interface FrameInput {
   headCurr: V3;
   /** >0 if the blade struck the enemy this frame (detected by the render/XR layer). */
   strikeSpeed: number;
+  /** Where the strike met his body (default 'center'), and whether it was a poke. */
+  strikeZone?: StrikeZone;
+  strikePoke?: boolean;
   /** Ability activated this frame (edge-triggered), or null. */
   ability: AbilityId | null;
 }
@@ -201,4 +214,9 @@ export interface DuelEvent {
   damage?: number;
   dodge?: DodgeKind;
   ability?: AbilityId;
+  /** On enemyHit / enemyBlock: where the strike landed and whether it was a poke. */
+  zone?: StrikeZone;
+  poke?: boolean;
+  /** On enemyHit: it went through his opening while he was idle. */
+  opening?: boolean;
 }

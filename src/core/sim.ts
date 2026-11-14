@@ -14,7 +14,9 @@ import type {
   Fault,
   FrameInput,
   GuardConfig,
+  GuardSide,
   Modifiers,
+  StrikeZone,
   SwordPose,
   TimingConfig,
 } from './types';
@@ -92,6 +94,10 @@ export class Duel {
     staggerUntil: 0,
     /** Frenzy windup multiplier, fixed when the current attack started so its strike never moves. */
     windupScale: 1,
+    /** Side he holds his sword on while idle; strikes to the other side get through. */
+    guardSide: 'right' as GuardSide,
+    /** Enemy-clock time he next moves his idle guard. */
+    guardShiftAt: 0,
   };
 
   readonly guard: GuardReading = { dir: null, angleErr: 90 };
@@ -101,6 +107,8 @@ export class Duel {
   private pending: { att: AttackDef; strikeT: number } | null = null;
   private entries: number[] = [];
   private readonly rng: Rng;
+  /** Separate stream for guard shifts, so they never change which combos the enemy picks. */
+  private readonly guardRng: Rng;
   private readonly ai: boolean;
   private readonly dodge = new DodgeDetector();
 
@@ -120,6 +128,7 @@ export class Duel {
     this.guardCfg = o.guard;
     this.mods = o.mods;
     this.rng = new Rng(o.seed);
+    this.guardRng = new Rng(o.seed ^ 0x5bd1e995);
     this.ai = o.ai ?? true;
     this.time = o.startT ?? 0;
 
@@ -132,6 +141,26 @@ export class Duel {
     e.hp = o.enemy.hp;
     e.clock = this.time;
     e.nextActionAt = this.time + 1500;
+    e.guardShiftAt = this.time + this.guardShiftDelay();
+  }
+
+  /** The side a strike gets through on right now: his idle opening, 'all' when he's attacking,
+   *  countered or broken. */
+  get opening(): GuardSide | 'all' | null {
+    const e = this.enemy;
+    if (e.state === 'dead') return null;
+    if (e.state !== 'idle' || this.time <= this.player.counterUntil) return 'all';
+    return e.guardSide === 'left' ? 'right' : 'left';
+  }
+
+  private guardShiftDelay(): number {
+    return this.guardRng.range(this.cfg.guardShiftMinMs, this.cfg.guardShiftMaxMs);
+  }
+
+  private shiftGuard(to: GuardSide): void {
+    const e = this.enemy;
+    e.guardSide = to;
+    e.guardShiftAt = e.clock + this.guardShiftDelay();
   }
 
   get grace(): number {
@@ -248,7 +277,7 @@ export class Duel {
       if (this.player.dead || e.state === 'dead') break;
     }
 
-    if (inp.strikeSpeed > 0 && !this.player.dead) this.onPlayerStrike(inp.t1);
+    if (inp.strikeSpeed > 0 && !this.player.dead) this.onPlayerStrike(inp.t1, inp.strikeZone ?? 'center', !!inp.strikePoke);
     this.regen(span, inp.t1);
     this.time = inp.t1;
   }
@@ -457,7 +486,7 @@ export class Duel {
 
   // ---------------------------------------------------------------- player offence
 
-  private onPlayerStrike(t: number): void {
+  private onPlayerStrike(t: number, zone: StrikeZone, poke: boolean): void {
     const e = this.enemy;
     const c = this.cfg;
     const p = this.player;
@@ -476,14 +505,20 @@ export class Duel {
       e.posture += 10;
       e.postureHitAt = t;
       p.counterUntil = -Infinity;
-      this.emit({ type: 'enemyHit', t, damage: d });
+      this.emit({ type: 'enemyHit', t, damage: d, zone, poke });
     } else if (e.state === 'attack') {
       e.hp -= dmg;
-      this.emit({ type: 'enemyHit', t, damage: dmg });
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke });
+    } else if (zone !== 'center' && zone !== e.guardSide) {
+      // Through his opening. He covers that side at once, so the next one has to go elsewhere.
+      e.hp -= dmg;
+      this.shiftGuard(zone);
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
     } else {
-      e.posture += c.playerPostureDamageOnBlocked;
+      // Deflected. A poke into the guard still leans on his posture.
+      e.posture += c.playerPostureDamageOnBlocked * (poke ? c.pokePostureMult : 1);
       e.postureHitAt = t;
-      this.emit({ type: 'enemyBlock', t });
+      this.emit({ type: 'enemyBlock', t, zone, poke });
     }
     if (!this.checkEnemyDead(t) && e.posture >= e.def.postureMax) this.breakEnemy(t);
   }
@@ -540,6 +575,7 @@ export class Duel {
     const spd = e.def.speed;
     switch (e.state) {
       case 'idle':
+        if (e.clock >= e.guardShiftAt) this.shiftGuard(e.guardSide === 'left' ? 'right' : 'left');
         if (this.ai && e.clock >= e.nextActionAt) {
           const tw = this.frenzy()?.tripleWeight ?? 1;
           const pool = tw === 1 ? e.def.combos : e.def.combos.map((c) => ({ ...c, weight: c.steps.length === 3 ? c.weight * tw : c.weight }));

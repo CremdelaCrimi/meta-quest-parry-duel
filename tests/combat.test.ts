@@ -451,3 +451,54 @@ describe('chain, assist and frenzy', () => {
     expect(d.windup(L)).toBe(w);
   });
 });
+
+describe('idle guard and openings', () => {
+  const at = (d: ReturnType<typeof makeDuel>) => d.time + 50;
+  const open = (d: ReturnType<typeof makeDuel>) => (d.enemy.guardSide === 'left' ? 'right' : 'left');
+
+  it('a strike to the guarded side is deflected: posture only', () => {
+    const d = makeDuel();
+    const evs = drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [at(d)], zone: d.enemy.guardSide });
+    expect(evs.find((e) => e.type === 'enemyBlock')?.zone).toBe(d.enemy.guardSide);
+    expect(d.enemy.hp).toBe(TEST_ENEMY.hp);
+    expect(d.enemy.posture).toBeCloseTo(PRESET_SEKIRO_LIKE.playerPostureDamageOnBlocked, 5);
+  });
+
+  it('a strike down his centre line hits his sword', () => {
+    const d = makeDuel();
+    const evs = drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [at(d)], zone: 'center' });
+    expect(evs.some((e) => e.type === 'enemyBlock')).toBe(true);
+    expect(d.enemy.hp).toBe(TEST_ENEMY.hp);
+  });
+
+  it('a strike to the open side lands, and he then covers that side', () => {
+    const d = makeDuel();
+    const side = open(d);
+    expect(d.opening).toBe(side);
+    const evs = drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [at(d)], zone: side });
+    const hit = evs.find((e) => e.type === 'enemyHit');
+    expect(hit?.opening).toBe(true);
+    expect(d.enemy.hp).toBe(TEST_ENEMY.hp - PRESET_SEKIRO_LIKE.playerDamage);
+    expect(d.enemy.guardSide).toBe(side);
+    // The same side again is now deflected.
+    drive(d, () => POSES.neutral, d.time + 500, 90, { strikeAt: [d.time + 400], zone: side });
+    expect(d.enemy.hp).toBe(TEST_ENEMY.hp - PRESET_SEKIRO_LIKE.playerDamage);
+  });
+
+  it('a poke into his guard deals extra posture', () => {
+    const d = makeDuel();
+    drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [at(d)], zone: 'center', poke: true });
+    const c = PRESET_SEKIRO_LIKE;
+    expect(d.enemy.posture).toBeCloseTo(c.playerPostureDamageOnBlocked * c.pokePostureMult, 5);
+  });
+
+  it('he moves his guard while waiting, and it is open everywhere while he attacks', () => {
+    const d = makeDuel();
+    const first = d.enemy.guardSide;
+    drive(d, () => POSES.neutral, d.time + PRESET_SEKIRO_LIKE.guardShiftMaxMs + 50);
+    expect(d.enemy.guardSide).not.toBe(first);
+    script(d, L, d.enemy.clock + 10);
+    drive(d, () => POSES.neutral, d.time + 100);
+    expect(d.opening).toBe('all');
+  });
+});

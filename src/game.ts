@@ -5,7 +5,7 @@ import { makePose } from './core/guard';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel } from './core/sim';
-import type { AbilityId, AttackDef, DuelEvent, Fault, SwordPose, TimingConfig, V3 } from './core/types';
+import type { AbilityId, AttackDef, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Sparks, SwordView, contactPoint } from './render/views';
@@ -20,7 +20,7 @@ interface Attempt {
   faults: Fault[];
 }
 
-const COLORS = { perfect: '#ffd34d', block: '#6fb6ff', angle: '#b48cff', shaky: '#ff9a3c', hit: '#ff5050', info: '#e8e8e8' };
+const COLORS = { perfect: '#ffd34d', block: '#6fb6ff', angle: '#b48cff', shaky: '#ff9a3c', hit: '#ff5050', info: '#e8e8e8', open: '#60ff9a' };
 
 /** Legend order and labels for the timing chart. */
 const LEGEND: Array<[keyof typeof COLORS, string]> = [
@@ -52,6 +52,11 @@ const hexOf = (k: keyof typeof COLORS) => parseInt(COLORS[k].slice(1), 16);
 /** Minimum blade-tip speed (m/s) for contact with the enemy to count as a strike. */
 const STRIKE_MIN_SPEED = 1.8;
 const STRIKE_COOLDOWN_MS = 350;
+/** Strikes within this distance (m) of his centre line hit his sword, not a side. */
+const ZONE_CENTER_M = 0.06;
+/** cos of the max angle between tip motion and blade line for a strike to count as a poke. */
+const POKE_ALIGN = 0.7;
+const zoneOf = (x: number): StrikeZone => (x < -ZONE_CENTER_M ? 'left' : x > ZONE_CENTER_M ? 'right' : 'center');
 
 export class Game {
   phase: Phase = 'calibrate';
@@ -106,6 +111,7 @@ export class Game {
   private readonly headCurr: V3 = { x: 0, y: 0, z: 0 };
   private readonly prevTip = new THREE.Vector3();
   private readonly tmp = new THREE.Vector3();
+  private readonly tmp2 = new THREE.Vector3();
   private readonly tmpV3: V3 = { x: 0, y: 0, z: 0 };
 
   constructor(
@@ -250,12 +256,24 @@ export class Game {
     }
 
     let strikeSpeed = 0;
+    let strikeZone: StrikeZone = 'center';
+    let strikePoke = false;
     if (f.hasSword && t >= this.strikeReadyAt && this.duel.enemy.state !== 'dead') {
       const speed = this.prevTip.distanceTo(f.tip) / Math.max(1e-3, dt / 1000);
       const contact = this.enemyView.bodyHit(f.hilt, f.tip, this.space) || this.enemyView.bodyHit(this.prevTip, f.tip, this.space);
-      if (contact && (speed > STRIKE_MIN_SPEED || (!this.isXR && f.rightTrigger))) strikeSpeed = Math.max(speed, 2);
+      if (contact && (speed > STRIKE_MIN_SPEED || (!this.isXR && f.rightTrigger))) {
+        strikeSpeed = Math.max(speed, 2);
+        strikeZone = zoneOf(this.space.toDuel(this.enemyView.hitPoint, this.tmpV3).x);
+        // A poke drives the tip along the blade's own line instead of sweeping it sideways.
+        const move = this.tmp.copy(f.tip).sub(this.prevTip);
+        const along = this.tmp2.copy(f.tip).sub(f.hilt).normalize();
+        strikePoke = move.length() > 1e-4 && move.normalize().dot(along) > POKE_ALIGN;
+      }
     }
-    if (!this.isXR && f.rightTrigger && this.phase === 'fight') strikeSpeed = 3; // desktop: click = strike
+    if (!this.isXR && f.rightTrigger && this.phase === 'fight') {
+      strikeSpeed = 3; // desktop: click = strike, on the side the mouse holds the sword
+      strikeZone = zoneOf(this.swordCurr.tip.x);
+    }
     if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS;
 
     let ability: AbilityId | null = null;
@@ -270,6 +288,8 @@ export class Game {
       headPrev: this.headPrev,
       headCurr: this.headCurr,
       strikeSpeed,
+      strikeZone,
+      strikePoke,
       ability,
     });
     for (const ev of this.duel.events) this.onEvent(ev, t);
@@ -342,12 +362,19 @@ export class Game {
         this.input.pulse('right', 1, 200);
         break;
       case 'enemyHit':
+        if (ev.opening) this.flashResult('OPENING · he covers that side now', COLORS.open, t);
         this.sfx.play('strike');
         this.enemyView.hit();
         this.input.pulse('right', 0.6, 30);
         this.sparks.burst(contact, 0xff6040, 8, 1.2);
         break;
       case 'enemyBlock':
+        // Show why the swing did nothing, and where to go instead.
+        this.flashResult(
+          ev.poke ? 'DEFLECTED · poke wears his posture' : ev.zone === 'center' ? 'DEFLECTED · hit his open side (green)' : 'DEFLECTED · that side is guarded',
+          COLORS.info,
+          t,
+        );
         this.sfx.play('block', 0.5);
         this.input.pulse('right', 0.35, 25);
         this.sparks.burst(contact, 0xffffff, 6, 1);
@@ -628,7 +655,9 @@ export class Game {
       line('↘ ↙  Diagonal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 66);
 
       line(xr ? 'ATTACK: swing your sword into his body' : 'ATTACK: click while he is open', '700 36px system-ui, sans-serif', '#ff8a5a', 44);
-      line('Hits hardest right after a perfect (gold) block.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
+      line('While he waits, hit the side his sword is NOT on (green', '500 29px system-ui, sans-serif', COLORS.open, 38);
+      line('glow). Pokes into his guard wear down his posture.', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line('Hits hardest right after a perfect (gold) block.', '500 29px system-ui, sans-serif', COLORS.perfect, 66);
 
       line('HEALTH: your strip sits low in your view', '700 36px system-ui, sans-serif', COLORS.hit, 44);
       line('Red = HP. Orange = posture (fills as you block; full =', '500 29px system-ui, sans-serif', '#d8dce4', 38);

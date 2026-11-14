@@ -15,7 +15,7 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Input | Action |
 |---|---|
 | Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
-| Swing into enemy | **Strike** (counter after a perfect parry; finisher when posture breaks) |
+| Swing into enemy | **Strike**. While he waits he guards one side: hit the side his sword isn't on (green ring). Lands anywhere while he swings; counter after a perfect parry; finisher when posture breaks |
 | Lean / duck | Dodge. Not needed yet: the current enemies only use blockable swings |
 | Left trigger / grip | Time Sigil / Ward (once picked up) |
 | Right trigger | Start / confirm |
@@ -46,6 +46,14 @@ and pauses 20% shorter; below 25%, 15% / 40% and 3-hit strings twice as likely (
 per attack so a strike never moves). **Assist:** after 3 hits in a row the perfect window opens 40 ms
 earlier until your next perfect, never past +80 ms total with boons (`?assistBonusMs=0` turns it off).
 Numbers were worked out with Gemini 3.1 Pro from the clips in `docs/clips/`.
+
+**Deflects and openings:** between attacks the enemy holds his sword on one side and deflects
+anything there or down his centre line (posture damage only, "DEFLECTED" above him). The other side
+is his opening, marked by a pulsing green ring: a strike there lands, and he moves his guard to cover
+it, so the next one has to go to the other side. He also shifts guard by himself every 1.4–2.6 s
+(`?guardShiftMinMs=&guardShiftMaxMs=`). A poke (tip driven along the blade's line) into his guard deals
+2× posture (`?pokePostureMult=`). While he's swinging, after a perfect parry (gold ring on his chest)
+and when he's broken, every strike lands.
 
 **Reading the fight:** a thin ghost sword shows the guard; an impact ring closes on it and turns gold
 as the perfect window opens. The enemy's HP, posture, chain and frenzy badges float above his head;

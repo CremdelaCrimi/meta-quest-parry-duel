@@ -45,6 +45,9 @@ const BASE: Omit<TimingConfig, 'name'> = {
 
   playerDamage: 8,
   playerPostureDamageOnBlocked: 6,
+  pokePostureMult: 2,
+  guardShiftMinMs: 1400,
+  guardShiftMaxMs: 2600,
   finisherDamage: 1000,
 };
 

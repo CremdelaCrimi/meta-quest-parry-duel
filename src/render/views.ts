@@ -91,6 +91,11 @@ const key = (k: Key): SwordPose => ({ hilt: { x: k[0], y: k[1], z: k[2] }, tip: 
 // path into an arc) -> strike (blade crossing exactly where the player's matching guard sits).
 type SwingKeys = { windup: SwordPose; mid: SwordPose; strike: SwordPose };
 const REST = key([0.0, -0.55, D - 0.45, 0.05, -0.35, D - 1.2]);
+// Idle guard: sword upright on one side of his body (player's view). The other side is open.
+const IDLE_GUARD: Record<'left' | 'right', SwordPose> = {
+  left: key([-0.2, -0.5, D - 0.4, -0.3, 0.25, D - 0.55]),
+  right: key([0.2, -0.5, D - 0.4, 0.3, 0.25, D - 0.55]),
+};
 const STAGGER = key([0.15, -0.95, D - 0.3, 0.35, -1.4, D - 0.6]);
 const mirror = (k: Key): Key => [-k[0], k[1], k[2], -k[3], k[4], k[5]];
 const keys = (w: Key, m: Key, s: Key): SwingKeys => ({ windup: key(w), mid: key(m), strike: key(s) });
@@ -433,7 +438,39 @@ export class EnemyView {
     const z = D - this.lunge;
     const feet = space.toWorld({ x: 0, y: -space.height + 0.2, z }, this.v1);
     const head = space.toWorld({ x: 0, y: -space.height + 1.7, z }, this.v2);
-    return segSegDist(a, b, feet, head) < r;
+    if (segSegDist(a, b, feet, head) >= r) return false;
+    this.hitPoint.copy(a).lerp(b, segS); // where the blade first met him, for the strike zone
+    return true;
+  }
+  /** World point on the player's blade closest to his body at the last bodyHit. */
+  readonly hitPoint = new THREE.Vector3();
+
+  // Opening marker: a soft green glow on the side of his body a strike gets through on,
+  // gold over the chest while a counter is open. Hidden while he's swinging (all hits land then)
+  // and while broken (the red finisher mark shows instead).
+  private readonly openMat = new THREE.MeshBasicMaterial({ color: 0x60ff9a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+  private readonly openMark = (() => {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.014, 8, 32), this.openMat);
+    m.renderOrder = 15;
+    return m;
+  })();
+  private openPulse = 0;
+  private openX = 0;
+
+  private updateOpening(duel: Duel, space: DuelSpace, Dz: number, dtMs: number): void {
+    if (!this.openMark.parent) this.root.add(this.openMark);
+    const o = duel.opening;
+    const counter = duel.time <= duel.player.counterUntil && duel.enemy.state !== 'stagger';
+    const show = o === 'left' || o === 'right' || counter;
+    this.openPulse += dtMs / 1000;
+    const x = counter ? 0 : o === 'left' ? -0.17 : 0.17;
+    this.openX += (x - this.openX) * (1 - Math.exp(-dtMs / 90)); // glide across when he shifts guard
+    const target = show ? 0.55 + 0.25 * Math.sin(this.openPulse * 6) : 0;
+    this.openMat.opacity += (target - this.openMat.opacity) * (1 - Math.exp(-dtMs / 60));
+    this.openMat.color.setHex(counter ? 0xffd040 : 0x60ff9a);
+    this.openMark.scale.setScalar(counter ? 1.6 : 1);
+    this.openMark.visible = this.openMat.opacity > 0.02;
+    DuelSpace.toLocal({ x: this.openX, y: -space.height + 1.2, z: Dz - 0.23 }, this.openMark.position);
   }
 
   /** Step in through the late windup and hold through the strike, then ease back during recovery. */
@@ -487,7 +524,7 @@ export class EnemyView {
           copyPose(this.target, REST);
         }
       } else {
-        copyPose(this.target, REST);
+        copyPose(this.target, e.state === 'idle' ? IDLE_GUARD[e.guardSide] : REST);
       }
     }
     if (!swing) {
@@ -522,6 +559,8 @@ export class EnemyView {
       this.bladeMat.emissive.setHex(0xffc040);
       this.bladeMat.emissiveIntensity = 1.3;
     }
+
+    this.updateOpening(duel, space, Dz, dtMs);
 
     this.deathMark.visible = e.state === 'stagger';
     if (this.deathMark.visible) DuelSpace.toLocal({ x: 0, y: -space.height + 1.25, z: Dz - 0.24 }, this.deathMark.position);

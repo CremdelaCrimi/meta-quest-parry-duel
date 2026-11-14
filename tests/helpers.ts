@@ -1,7 +1,7 @@
 import { DEFAULT_GUARD, PRESET_SEKIRO_LIKE, defaultModifiers } from '../src/core/config';
 import { lerpPose, makePose } from '../src/core/guard';
 import { Duel } from '../src/core/sim';
-import type { AttackDef, DuelEvent, EnemyDef, SwordPose, TimingConfig, V3 } from '../src/core/types';
+import type { AttackDef, DuelEvent, EnemyDef, StrikeZone, SwordPose, TimingConfig, V3 } from '../src/core/types';
 
 const P = (hx: number, hy: number, hz: number, tx: number, ty: number, tz: number): SwordPose => ({
   hilt: { x: hx, y: hy, z: hz },
@@ -77,7 +77,14 @@ export function drive(
   poseAt: (t: number) => SwordPose,
   tEnd: number,
   hz = 90,
-  extra: { headAt?: (t: number) => V3; strikeAt?: number[]; abilityAt?: Array<[number, 'slowTime' | 'ward']> } = {},
+  extra: {
+    headAt?: (t: number) => V3;
+    strikeAt?: number[];
+    /** Zone and poke applied to every strike in strikeAt (default centre slash). */
+    zone?: StrikeZone;
+    poke?: boolean;
+    abilityAt?: Array<[number, 'slowTime' | 'ward']>;
+  } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
   const events: DuelEvent[] = [];
@@ -99,7 +106,18 @@ export function drive(
     }
     let ability: 'slowTime' | 'ward' | null = null;
     if (abilities.length && abilities[0][0] <= t1) ability = abilities.shift()![1];
-    duel.step({ t0: t, t1, swordPrev: prev, swordCurr: cur, headPrev: prevHead, headCurr: head, strikeSpeed, ability });
+    duel.step({
+      t0: t,
+      t1,
+      swordPrev: prev,
+      swordCurr: cur,
+      headPrev: prevHead,
+      headCurr: head,
+      strikeSpeed,
+      strikeZone: extra.zone,
+      strikePoke: extra.poke,
+      ability,
+    });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;
     prevHead = head;
