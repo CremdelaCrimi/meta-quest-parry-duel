@@ -101,6 +101,8 @@ export interface TimingConfig {
   iframesMs: number;
   dodgeCooldownMs: number;
   counterWindowMs: number;
+  /** Enemy freeze on a perfect parry (doubled when it breaks posture). Player and camera never freeze. */
+  hitStopMs: number;
 
   playerDamage: number;
   playerPostureDamageOnBlocked: number;

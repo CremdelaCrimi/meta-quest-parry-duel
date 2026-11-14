@@ -205,6 +205,9 @@ export class EnemyView {
     const att = duel.currentAttack;
     const p = duel.attackProgress();
     let swing = false;
+    // Hit-stop: the enemy holds its pose; the player's view and hands keep tracking.
+    const frozen = duel.time >= duel.player.hitStopFrom && duel.time < duel.player.hitStopUntil;
+    const animMs = frozen ? 0 : dtMs;
 
     // Body stands on the floor at the enemy position.
     DuelSpace.toLocal({ x: 0, y: -space.height, z: D }, this.body.position);
@@ -237,7 +240,7 @@ export class EnemyView {
     }
     if (!swing) {
       const rate = e.state === 'attack' && !e.struck ? 9 : 6;
-      lerpPoseInto(this.pose, this.pose, this.target, 1 - Math.exp((-rate * dtMs) / 1000));
+      lerpPoseInto(this.pose, this.pose, this.target, 1 - Math.exp((-rate * animMs) / 1000));
     }
 
     // Blade and arms.
@@ -261,6 +264,11 @@ export class EnemyView {
     this.bladeMat.emissive.setHex(peril ? 0xff2020 : 0xffffff);
     // Always faintly lit so the blade reads against the dark arena; brightens toward the strike.
     this.bladeMat.emissiveIntensity = peril ? 0.5 + glow : 0.25 + glow * glow * 0.9;
+    if (frozen) {
+      // Parried blade flares gold for the length of the freeze.
+      this.bladeMat.emissive.setHex(0xffc040);
+      this.bladeMat.emissiveIntensity = 1.3;
+    }
 
     this.deathMark.visible = e.state === 'stagger';
     if (this.deathMark.visible) DuelSpace.toLocal({ x: 0, y: -space.height + 1.25, z: D - 0.24 }, this.deathMark.position);

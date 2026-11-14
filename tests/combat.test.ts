@@ -5,7 +5,7 @@ import { ATTACKS, ENEMIES } from '../src/core/enemies';
 import { classifyGuard } from '../src/core/guard';
 import type { GuardReading } from '../src/core/guard';
 import { PICKUPS, Run } from '../src/core/roguelite';
-import { POSES, drive, guardAt, makeDuel, outcome, schedule, script } from './helpers';
+import { POSES, TEST_ENEMY, drive, guardAt, makeDuel, outcome, schedule, script } from './helpers';
 
 const L = ATTACKS.slashLeft; // windup 600 ms
 const START = 1000;
@@ -127,6 +127,55 @@ describe('parry timing', () => {
   });
 });
 
+describe('hit-stop', () => {
+  const HS = PRESET_SEKIRO_LIKE.hitStopMs;
+  /** How far the enemy clock has fallen behind real time. */
+  const lag = (d: ReturnType<typeof makeDuel>) => d.time - d.enemy.clock;
+
+  it('a perfect parry freezes the enemy clock for exactly hitStopMs, at any frame rate', () => {
+    for (const hz of [30, 72, 90, 120]) {
+      const d = makeDuel();
+      script(d, L, START);
+      expect(outcome(drive(d, guardAt(POSES.left, S - 60), 2200, hz))?.type).toBe('perfect');
+      expect(lag(d)).toBeCloseTo(HS, 6);
+    }
+  });
+
+  it('a regular block does not freeze the enemy', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    expect(outcome(drive(d, guardAt(POSES.left, S - 400), 2200))?.type).toBe('block');
+    expect(lag(d)).toBeCloseTo(0, 6);
+  });
+
+  it('a posture-breaking parry freezes twice as long', () => {
+    const d = makeDuel({ enemy: { ...TEST_ENEMY, postureMax: 1 } });
+    script(d, L, START);
+    const evs = drive(d, guardAt(POSES.left, S - 60), 2200);
+    expect(evs.some((e) => e.type === 'enemyPostureBreak')).toBe(true);
+    expect(lag(d)).toBeCloseTo(HS * 2, 6);
+  });
+
+  it('the next combo strike lands hitStopMs later, so it stays in sync with the frozen pose', () => {
+    const d = makeDuel();
+    d.scriptCombo({ weight: 1, steps: [{ attack: L, chainDelayMs: 300 }, { attack: L, chainDelayMs: 0 }] }, START);
+    const evs = drive(d, guardAt(POSES.left, S - 60), 3000).filter((e) => ['perfect', 'block', 'hit'].includes(e.type));
+    expect(evs[0].type).toBe('perfect');
+    // Second strike: S + chain 300 + windup 600 on the enemy clock, plus the freeze in real time.
+    expect(evs[1].t).toBeCloseTo(S + 300 + L.windupMs + HS, 6);
+  });
+
+  it('the counter window opens after the freeze', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    // Past S + counterWindowMs, but inside it once the freeze is added.
+    const at = S + PRESET_SEKIRO_LIKE.counterWindowMs + HS / 2;
+    const evs = drive(d, guardAt(POSES.left, S - 60), 2600, 90, { strikeAt: [at] });
+    const hit = evs.find((e) => e.type === 'enemyHit');
+    expect(hit?.damage).toBeCloseTo(PRESET_SEKIRO_LIKE.playerDamage * 1.5, 6);
+  });
+});
+
 describe('anti-spam', () => {
   it('flailing in and out of guard locks out the perfect parry', () => {
     const d = makeDuel();
@@ -201,7 +250,8 @@ describe('posture and finisher', () => {
     let start = 1000;
     for (let i = 0; i < 3; i++) {
       script(d, H, start);
-      const s = start + H.windupMs;
+      // `start` is enemy-clock time; earlier parries' hit-stops put real time ahead of it.
+      const s = start + H.windupMs + (d.time - d.enemy.clock);
       keys.length = 0;
       keys.push([s - 60, POSES.high], [s + 200, POSES.neutral]);
       drive(d, schedule(keys), s + 300);

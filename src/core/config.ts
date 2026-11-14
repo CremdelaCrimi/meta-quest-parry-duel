@@ -36,6 +36,7 @@ const BASE: Omit<TimingConfig, 'name'> = {
   iframesMs: 320,
   dodgeCooldownMs: 250,
   counterWindowMs: 700,
+  hitStopMs: 70, // reference: 50-100 ms starting guess, tune by feel
 
   playerDamage: 8,
   playerPostureDamageOnBlocked: 6,

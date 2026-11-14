@@ -63,6 +63,9 @@ export class Duel {
     counterUntil: -Infinity,
     wardCharges: 0,
     slowUntil: -Infinity,
+    /** Real-time interval during which the enemy clock is frozen (perfect-parry hit-stop). */
+    hitStopFrom: -Infinity,
+    hitStopUntil: -Infinity,
     abilityReadyAt: { slowTime: 0, ward: 0 } as Record<AbilityId, number>,
     dead: false,
   };
@@ -179,16 +182,12 @@ export class Duel {
       }
 
       // 3. Enemy strike instant inside this sub-step?
-      const scale = this.timeScale(a);
       const e = this.enemy;
       const eA = e.clock;
-      const eB = eA + (b - a) * scale;
-      let strikeT = NaN;
       const att = this.currentAttack;
-      if (att && !e.struck) {
-        const sE = e.attackStart + this.windup(att);
-        if (sE <= eB) strikeT = a + Math.max(0, sE - eA) / scale;
-      }
+      const sE = att && !e.struck ? e.attackStart + this.windup(att) : Infinity;
+      this.advanceClock(a, b, eA, sE);
+      let strikeT = this.advStrikeT;
 
       // 4. Process in time order.
       if (!Number.isNaN(transT) && !Number.isNaN(strikeT) && transT <= strikeT) {
@@ -208,7 +207,9 @@ export class Duel {
         this.takeHit(pd.att, pd.strikeT + this.grace);
       }
 
-      e.clock = eB;
+      // Recomputed: a perfect parry in this sub-step may have started a hit-stop.
+      this.advanceClock(a, b, eA, Infinity);
+      e.clock = this.advE;
       this.advanceEnemy(b);
       if (this.player.dead || e.state === 'dead') break;
     }
@@ -296,9 +297,15 @@ export class Duel {
     p.posture = Math.min(c.playerPostureMax - 1, p.posture + c.deflectPlayerPosture);
     p.postureHitAt = t;
     p.hp = Math.min(p.hpMax, p.hp + this.mods.healOnPerfect);
-    p.counterUntil = t + c.counterWindowMs;
+    const breaks = e.posture >= e.def.postureMax;
+    // A posture-breaking parry gets a heavier freeze. The counter window opens after it,
+    // so the freeze never eats into the player's time to counter.
+    const stop = breaks ? c.hitStopMs * 2 : c.hitStopMs;
+    p.hitStopFrom = t;
+    p.hitStopUntil = t + stop;
+    p.counterUntil = t + stop + c.counterWindowMs;
     this.emit({ type: 'perfect', t, offsetMs: offset, attackId: att.id, dir: att.dir });
-    if (e.posture >= e.def.postureMax) this.breakEnemy(t);
+    if (breaks) this.breakEnemy(t);
   }
 
   private onBlock(att: AttackDef, t: number, offset: number): void {
@@ -362,7 +369,34 @@ export class Duel {
   }
 
   timeScale(t: number): number {
+    if (t >= this.player.hitStopFrom && t < this.player.hitStopUntil) return 0;
     return t < this.player.slowUntil ? SLOW_SCALE : 1;
+  }
+
+  private advE = 0;
+  private advStrikeT = NaN;
+
+  /**
+   * Advance the enemy clock across real time [a, b], skipping the hit-stop interval exactly
+   * (so frame rate doesn't change when the next strike lands). Writes advE, and advStrikeT =
+   * the real time the enemy clock reaches `sE`, or NaN. Slow-time is sampled at `a`.
+   */
+  private advanceClock(a: number, b: number, eA: number, sE: number): void {
+    const s = a < this.player.slowUntil ? SLOW_SCALE : 1;
+    const { hitStopFrom: f, hitStopUntil: u } = this.player;
+    let e = eA;
+    let strikeT = NaN;
+    for (let i = 0; i < 2; i++) {
+      // Live parts of [a, b]: before the freeze starts, then after it ends.
+      const x = i === 0 ? a : Math.max(a, u);
+      const y = i === 0 ? Math.min(b, f) : b;
+      if (y <= x) continue;
+      const e2 = e + (y - x) * s;
+      if (Number.isNaN(strikeT) && sE <= e2) strikeT = x + Math.max(0, sE - e) / s;
+      e = e2;
+    }
+    this.advE = e;
+    this.advStrikeT = strikeT;
   }
 
   // ---------------------------------------------------------------- player offence
