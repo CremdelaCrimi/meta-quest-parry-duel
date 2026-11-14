@@ -24,6 +24,13 @@ e.g. `?perfectEarlyMs=150&perfectLateMs=50&iframesMs=400` (add `&preset=1` for t
 P / Y in game cycles presets). `?hitStopMs=` tunes the enemy freeze on a perfect parry.
 The in-headset panel shows each guard's timing relative to the strike (negative = early) so tuning is data-driven.
 
+## Rigged enemy (opt-in: `?enemy=rigged`)
+`public/enemy/` holds a Tripo-generated, Mixamo-rigged swordsman (`swordsman.glb`, ~2 MB, 10 clips)
+and `enemy.json`, which maps each sim attack to a clip plus its release/impact marks. The game scrubs
+each clip from the enemy clock so impact always lands on the sim's strike instant (`src/render/clipTiming.ts`).
+Rebuild after re-exporting clips from Tripo (one skinned GLB per clip, named `<clip>.glb`):
+`node tools/build-enemy.mjs <clips-dir> public/enemy`. Prompts and clip list: `art/enemy-base/tripo-prompts.md`.
+
 ## Layout
 - `src/core/` — engine-agnostic combat sim (no three.js). Sub-frame, millisecond timing. Portable to Unity/Godot.
 - `src/render/`, `src/xr/`, `src/audio/` — three.js views, WebXR + desktop input, synthesised SFX.

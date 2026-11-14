@@ -14,9 +14,12 @@ export interface EnemyManifest {
   heightM: number;
   /** Bone the sword is parented to, e.g. "mixamorigRightHand". */
   handBone: string;
-  /** Sword placement in the hand bone's space: offset (m) and rotation (deg). */
-  swordOffset: [number, number, number];
-  swordEulerDeg: [number, number, number];
+  /**
+   * Optional manual sword placement in the hand bone's space: offset (m) and rotation (deg).
+   * Omit both to derive the grip from the finger bones (works for any Mixamo-named rig).
+   */
+  swordOffset?: [number, number, number];
+  swordEulerDeg?: [number, number, number];
   swordLengthM: number;
   /**
    * Optional: clip name → GLB holding that one animation on the same rig (Tripo exports a file
@@ -31,6 +34,25 @@ export interface EnemyManifest {
 }
 
 const FADE_MS = 120;
+
+/**
+ * Sword grip from the hand's finger bones (rest pose): the blade starts in the palm and leaves
+ * the fist on the index-finger side, i.e. along pinky knuckle -> index knuckle. Returns false
+ * if the rig has no finger bones, so the manifest's manual placement is used instead.
+ */
+function placeGrip(blade: THREE.Object3D, hand: THREE.Object3D, scene: THREE.Object3D, handBone: string): boolean {
+  const local = (suffix: string) => {
+    const o = scene.getObjectByName(handBone + suffix);
+    return o ? hand.worldToLocal(o.getWorldPosition(new THREE.Vector3())) : null;
+  };
+  const idx = local('Index1');
+  const pky = local('Pinky1');
+  const mid = local('Middle1');
+  if (!idx || !pky || !mid) return false;
+  blade.position.copy(mid).multiplyScalar(0.5);
+  blade.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), idx.sub(pky).normalize());
+  return true;
+}
 
 /**
  * A skinned enemy whose pose is computed from the sim every frame (never free-running):
@@ -75,13 +97,19 @@ export class RiggedEnemy {
 
     const hand = scene.getObjectByName(m.handBone);
     if (hand) {
+      scene.updateMatrixWorld(true);
       const geo = new THREE.BoxGeometry(0.022, 1, 0.055);
       geo.translate(0, 0.5, 0);
       const blade = new THREE.Mesh(geo, bladeMat);
-      blade.scale.set(1 / s, m.swordLengthM / s, 1 / s); // undo the model scale so the blade keeps real size
-      blade.position.set(...m.swordOffset).multiplyScalar(1 / s);
-      blade.rotation.set(...(m.swordEulerDeg.map(THREE.MathUtils.degToRad) as [number, number, number]));
+      const hs = hand.getWorldScale(new THREE.Vector3()).x;
+      blade.scale.set(1 / hs, m.swordLengthM / hs, 1 / hs); // real-world size whatever the rig's scale
       hand.add(blade);
+      const manual = m.swordOffset !== undefined || m.swordEulerDeg !== undefined;
+      if (manual || !placeGrip(blade, hand, scene, m.handBone)) {
+        blade.position.set(...(m.swordOffset ?? [0, 0, 0])).multiplyScalar(1 / hs);
+        const e = (m.swordEulerDeg ?? [90, 0, 0]).map(THREE.MathUtils.degToRad) as [number, number, number];
+        blade.rotation.set(...e);
+      }
     } else {
       console.warn(`[enemy] hand bone "${m.handBone}" not found; no sword attached`);
     }

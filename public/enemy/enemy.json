@@ -1,0 +1,56 @@
+{
+  "model": "swordsman.glb",
+  "heightM": 1.8,
+  "handBone": "mixamorigRightHand",
+  "swordLengthM": 0.95,
+  "idle": "idle",
+  "stagger": "stagger",
+  "death": "death",
+  "attacks": {
+    "slashLeft": {
+      "clip": "slash_r2l",
+      "releaseMs": 1608,
+      "impactMs": 1833
+    },
+    "quickLeft": {
+      "clip": "slash_r2l",
+      "releaseMs": 1608,
+      "impactMs": 1833
+    },
+    "slashRight": {
+      "clip": "slash_l2r",
+      "releaseMs": 1958,
+      "impactMs": 2217
+    },
+    "quickRight": {
+      "clip": "slash_l2r",
+      "releaseMs": 1958,
+      "impactMs": 2217
+    },
+    "slashHigh": {
+      "clip": "overhead",
+      "releaseMs": 342,
+      "impactMs": 592
+    },
+    "heavyHigh": {
+      "clip": "heavy_overhead",
+      "releaseMs": 1342,
+      "impactMs": 1508
+    },
+    "slashLow": {
+      "clip": "low_cut",
+      "releaseMs": 517,
+      "impactMs": 708
+    },
+    "thrust": {
+      "clip": "thrust",
+      "releaseMs": 1925,
+      "impactMs": 2208
+    },
+    "sweep": {
+      "clip": "head_sweep",
+      "releaseMs": 608,
+      "impactMs": 1175
+    }
+  }
+}
