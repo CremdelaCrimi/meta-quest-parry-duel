@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import type { V3 } from '../core/types';
 
 /** Distance from the player's head to the enemy's centre line (m). */
-export const ENEMY_DIST = 1.5;
+export const ENEMY_DIST = 1.85;
+/** How far the enemy steps in during an attack so the blade reaches the player (m). */
+export const ATTACK_LUNGE = 0.5;
 /** How quickly the duel centre (and the enemy) re-centre on the player after they move (s). */
 const FOLLOW_TAU = 0.8;
 

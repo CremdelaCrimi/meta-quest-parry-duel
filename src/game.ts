@@ -5,7 +5,7 @@ import { makePose } from './core/guard';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel } from './core/sim';
-import type { AbilityId, DuelEvent, SwordPose, TimingConfig, V3 } from './core/types';
+import type { AbilityId, DuelEvent, Fault, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Sparks, SwordView } from './render/views';
@@ -16,9 +16,37 @@ type Phase = 'calibrate' | 'fight' | 'won' | 'reward' | 'dead';
 interface Attempt {
   offset: number;
   type: 'perfect' | 'block' | 'hit';
+  faults: Fault[];
 }
 
-const COLORS = { perfect: '#ffd34d', block: '#6fb6ff', hit: '#ff5050', info: '#e8e8e8' };
+const COLORS = { perfect: '#ffd34d', block: '#6fb6ff', angle: '#b48cff', shaky: '#ff9a3c', hit: '#ff5050', info: '#e8e8e8' };
+
+/** Legend order and labels for the timing chart. */
+const LEGEND: Array<[keyof typeof COLORS, string]> = [
+  ['perfect', 'Perfect'],
+  ['block', 'Block: timing'],
+  ['angle', 'Block: angle'],
+  ['shaky', 'Block: not held'],
+  ['hit', 'Hit'],
+];
+
+/** Colour for an outcome: a block is coloured by its main fault (steadiness, then angle, then timing). */
+function outcomeColor(type: Attempt['type'], faults: Fault[] = []): keyof typeof COLORS {
+  if (type !== 'block') return type;
+  if (faults.includes('shaky') || faults.includes('locked')) return 'shaky';
+  if (faults.includes('angle')) return 'angle';
+  return 'block';
+}
+
+const FAULT_TEXT: Record<Fault, string> = {
+  early: 'early',
+  late: 'late',
+  angle: 'angle',
+  shaky: 'not held',
+  locked: 'flailing',
+  side: 'wrong side',
+};
+const hexOf = (k: keyof typeof COLORS) => parseInt(COLORS[k].slice(1), 16);
 
 /** Minimum blade-tip speed (m/s) for contact with the enemy to count as a strike. */
 const STRIKE_MIN_SPEED = 1.8;
@@ -75,8 +103,8 @@ export class Game {
     scene.add(this.space.group, this.sparks.points);
     this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh);
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this; // console tuning
-    // ?enemy=rigged swaps in the Tripo swordsman from public/enemy/ (opt-in while its clips are reviewed).
-    if (new URLSearchParams(location.search).get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
+    // The rigged swordsman from public/enemy/ is the default; ?enemy=procedural keeps the built-in one.
+    if (new URLSearchParams(location.search).get('enemy') !== 'procedural') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
 
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });
@@ -209,24 +237,32 @@ export class Game {
         this.input.pulse('right', 1, 50);
         this.sparks.burst(contact, 0xffd060, 28, 2.5);
         this.sword.flash(0xffc040);
-        this.record(ev.offsetMs!, 'perfect');
+        this.record(ev.offsetMs!, 'perfect', []);
         this.flashResult(`PERFECT  ${fmt(ev.offsetMs!)}`, COLORS.perfect, t);
         break;
-      case 'block':
+      case 'block': {
+        const col = outcomeColor('block', ev.faults);
         this.sfx.play('block');
         this.input.pulse('right', 0.5, 35);
-        this.sparks.burst(contact, 0x80b8ff, 10, 1.4);
-        this.sword.flash(0x4080ff);
-        this.record(ev.offsetMs!, 'block');
-        this.flashResult(`BLOCK  ${fmt(ev.offsetMs!)}`, COLORS.block, t);
+        this.sparks.burst(contact, hexOf(col), 10, 1.4);
+        this.sword.flash(hexOf(col));
+        this.record(ev.offsetMs!, 'block', ev.faults ?? []);
+        this.flashResult(`BLOCK: ${faultText(ev.faults)}  ${fmt(ev.offsetMs!)}`, COLORS[col], t);
         break;
+      }
       case 'hit': {
         this.sfx.play('hit');
         this.input.pulse('right', 1, 120);
         this.input.pulse('left', 1, 120);
-        if (ev.offsetMs !== undefined) this.record(ev.offsetMs, 'hit');
+        this.record(ev.offsetMs ?? 0, 'hit', ev.faults ?? []);
         const why =
-          ev.perilous === 'thrust' ? ' (thrust: lean!)' : ev.perilous === 'sweep' ? ' (sweep: duck!)' : ev.offsetMs !== undefined ? `  ${fmt(ev.offsetMs)}` : ` (guard ${ev.dir})`;
+          ev.perilous === 'thrust'
+            ? ' (thrust: lean!)'
+            : ev.perilous === 'sweep'
+              ? ' (sweep: duck!)'
+              : ev.faults?.includes('side')
+                ? ` (guard ${ev.dir})`
+                : `: ${faultText(ev.faults)}  ${ev.offsetMs !== undefined ? fmt(ev.offsetMs) : ''}`;
         this.flashResult(`HIT${why}`, COLORS.hit, t);
         break;
       }
@@ -377,8 +413,8 @@ export class Game {
 
   // ---------------------------------------------------------------- HUD
 
-  private record(offset: number, type: Attempt['type']): void {
-    this.attempts.push({ offset, type });
+  private record(offset: number, type: Attempt['type'], faults: Fault[]): void {
+    this.attempts.push({ offset, type, faults });
     if (this.attempts.length > 30) this.attempts.shift();
   }
 
@@ -436,46 +472,73 @@ export class Game {
       ctx.fillRect(X(0) - 1.5, y - 44, 3, 88);
       ctx.font = '22px system-ui, sans-serif';
       ctx.fillStyle = '#9aa3b0';
-      ctx.fillText('early', x0, y + 70);
-      ctx.fillText('strike', X(0) - 30, y + 70);
-      ctx.fillText('late', x1 - 44, y + 70);
+      ctx.fillText('← early', x0, y + 64);
+      ctx.fillText('strike', X(0) - 30, y + 64);
+      ctx.fillText('late →', x1 - 64, y + 64);
+      // Wrong-side hits have no timing: they sit in a column at the far right.
       this.attempts.forEach((a, i) => {
         const age2 = this.attempts.length - 1 - i;
         ctx.globalAlpha = Math.max(0.2, 1 - age2 / 30);
-        ctx.fillStyle = COLORS[a.type];
+        ctx.fillStyle = COLORS[outcomeColor(a.type, a.faults)];
+        const px = a.faults.includes('side') ? x1 - 8 : X(Math.max(lo, Math.min(hi, a.offset)));
         ctx.beginPath();
-        ctx.arc(X(Math.max(lo, Math.min(hi, a.offset))), y + ((i % 5) - 2) * 11, age2 === 0 ? 11 : 7, 0, Math.PI * 2);
+        ctx.arc(px, y + ((i % 5) - 2) * 11, age2 === 0 ? 11 : 7, 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.globalAlpha = 1;
-      const timed = this.attempts.filter((a) => a.type !== 'hit');
-      if (timed.length) {
-        const mean = timed.reduce((s, a) => s + a.offset, 0) / timed.length;
-        ctx.font = '500 26px system-ui, sans-serif';
+
+      // Legend: what each colour means. Bands: gold = perfect window, blue = block window.
+      ctx.font = '21px system-ui, sans-serif';
+      let lx = 32;
+      for (const [key, label] of LEGEND) {
+        ctx.fillStyle = COLORS[key];
+        ctx.beginPath();
+        ctx.arc(lx + 9, 398, 9, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = '#cfd4dc';
-        ctx.fillText(`avg guard timing ${fmt(mean)} · perfect ${this.attempts.filter((a) => a.type === 'perfect').length}/${this.attempts.length}`, 32, 420);
+        ctx.fillText(label, lx + 24, 405);
+        lx += 24 + ctx.measureText(label).width + 28;
       }
+
+      // Breakdown: why guards weren't perfect, over the recent attempts.
+      ctx.font = '500 25px system-ui, sans-serif';
+      ctx.fillStyle = '#cfd4dc';
+      const timed = this.attempts.filter((a) => !a.faults.includes('side'));
+      const perfect = this.attempts.filter((a) => a.type === 'perfect').length;
+      const mean = timed.length ? timed.reduce((s, a) => s + a.offset, 0) / timed.length : 0;
+      ctx.fillText(`Perfect ${perfect}/${this.attempts.length}${timed.length ? ` · avg timing ${fmt(mean)}` : ''}`, 32, 450);
+      const count = (...f: Fault[]) => this.attempts.filter((a) => a.type !== 'perfect' && a.faults.some((x) => f.includes(x))).length;
+      const parts: Array<[string, number]> = [
+        ['timing', count('early', 'late')],
+        ['angle', count('angle')],
+        ['not held', count('shaky', 'locked')],
+        ['wrong side', count('side')],
+      ];
+      ctx.fillStyle = '#9aa3b0';
+      ctx.fillText(`Not perfect because: ${parts.map(([k, n]) => `${k} ${n}`).join(' · ')}`, 32, 488);
 
       // Performance.
       const fm = this.frameMs;
       const avg = fm.reduce((s, v) => s + v, 0) / Math.max(1, fm.length);
       const max = Math.max(...fm);
+      ctx.font = '21px system-ui, sans-serif';
       ctx.fillStyle = max > 1.5 * (1000 / this.targetHz()) ? '#ff8080' : '#8fd48f';
       ctx.fillText(
         `${(1000 / avg).toFixed(0)} fps (target ${this.targetHz()}) · ${avg.toFixed(1)} ms avg · ${max.toFixed(1)} max · dropped ${this.dropped} · audio ${this.sfx.latencyMs().toFixed(0)} ms`,
         32,
-        480,
+        535,
       );
 
       // Build and abilities.
+      ctx.font = '500 25px system-ui, sans-serif';
       ctx.fillStyle = '#cfd4dc';
       const owned = Object.entries(this.run.stacks).map(([id, n]) => (n > 1 ? `${id}×${n}` : id));
-      ctx.fillText(`Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 540);
+      ctx.fillText(`Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 585);
       const ab = d.mods.abilities.map((a) => {
         const left = Math.max(0, d.player.abilityReadyAt[a] - t) / 1000;
         return `${a === 'slowTime' ? 'L-trigger Time' : 'L-grip Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
       });
-      if (ab.length) ctx.fillText(ab.join('   '), 32, 590);
+      if (ab.length) ctx.fillText(ab.join('   '), 32, 625);
       ctx.fillStyle = '#7c8594';
       ctx.font = '22px system-ui, sans-serif';
       ctx.fillText(this.isXR ? 'A: hide panel · B: recalibrate · Y: switch timing preset' : 'H: hide panel · R: recalibrate · P: switch timing preset', 32, 680);
@@ -537,6 +600,12 @@ function place(mesh: THREE.Object3D, v: V3): void {
 function copyPose(o: SwordPose, a: SwordPose): void {
   Object.assign(o.hilt, a.hilt);
   Object.assign(o.tip, a.tip);
+}
+
+/** Faults as words, e.g. "angle + not held". Timing is left to fmt(), which says early/late. */
+function faultText(faults: Fault[] = []): string {
+  const rest = faults.filter((f) => f !== 'early' && f !== 'late').map((f) => FAULT_TEXT[f]);
+  return rest.length ? rest.join(' + ') : 'timing';
 }
 
 function fmt(ms: number): string {

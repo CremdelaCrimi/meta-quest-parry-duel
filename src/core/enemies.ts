@@ -28,10 +28,29 @@ export const ATTACKS = {
   sweep: atk('sweep', 'high', 900, { perilous: 'sweep', damage: 26, postureDamage: 0, recoverMs: 900 }),
 } satisfies Record<string, AttackDef>;
 
-const step = (attack: AttackDef, chainDelayMs = 250): ComboStep => ({ attack, chainDelayMs });
-const combo = (weight: number, ...steps: ComboStep[]): Combo => ({ weight, steps });
-
 const A = ATTACKS;
+
+/**
+ * Attack patterns are strings of 1, 2 or 3 hits with a fixed rhythm per enemy (`beatMs` between
+ * a strike and the next windup), so each enemy's strings are learnable. Which string comes next
+ * is random for now: `weights` sets how often 1-, 2- and 3-hit strings are picked, split evenly
+ * among the patterns of that length.
+ */
+function patterns(
+  beatMs: number,
+  weights: [number, number, number],
+  strings: { 1: AttackDef[][]; 2: AttackDef[][]; 3: AttackDef[][] },
+): Combo[] {
+  const out: Combo[] = [];
+  for (const len of [1, 2, 3] as const) {
+    const list = strings[len];
+    for (const attacks of list) {
+      const steps: ComboStep[] = attacks.map((attack) => ({ attack, chainDelayMs: beatMs }));
+      out.push({ weight: weights[len - 1] / list.length, steps });
+    }
+  }
+  return out;
+}
 
 export const ENEMIES: EnemyDef[] = [
   {
@@ -41,13 +60,12 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1,
     idleMinMs: 900,
     idleMaxMs: 1600,
-    combos: [
-      combo(3, step(A.slashLeft)),
-      combo(3, step(A.slashRight)),
-      combo(2, step(A.slashHigh)),
-      combo(2, step(A.slashLeft, 300), step(A.slashRight)),
-      combo(1, step(A.heavyHigh)),
-    ],
+    // Mostly singles while you learn the sides; slow, even beat.
+    combos: patterns(320, [5, 3, 1], {
+      1: [[A.slashLeft], [A.slashRight], [A.slashHigh]],
+      2: [[A.slashLeft, A.slashRight], [A.slashHigh, A.slashLow]],
+      3: [[A.slashLeft, A.slashRight, A.heavyHigh]],
+    }),
   },
   {
     name: 'Duelist',
@@ -56,13 +74,14 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1.1,
     idleMinMs: 700,
     idleMaxMs: 1300,
-    combos: [
-      combo(2, step(A.quickLeft, 180), step(A.quickRight, 180), step(A.slashHigh)),
-      combo(2, step(A.slashRight, 250), step(A.slashLow)),
-      combo(2, step(A.slashLeft, 220), step(A.slashLeft, 220), step(A.slashRight)),
-      combo(1, step(A.thrust)),
-      combo(1, step(A.heavyHigh)),
-    ],
+    combos: patterns(230, [2, 3, 3], {
+      1: [[A.thrust], [A.heavyHigh]],
+      2: [[A.slashRight, A.slashLow], [A.quickLeft, A.quickRight]],
+      3: [
+        [A.quickLeft, A.quickRight, A.slashHigh],
+        [A.slashLeft, A.slashLeft, A.slashRight],
+      ],
+    }),
   },
   {
     name: 'Sentinel',
@@ -71,12 +90,15 @@ export const ENEMIES: EnemyDef[] = [
     speed: 1.15,
     idleMinMs: 600,
     idleMaxMs: 1100,
-    combos: [
-      combo(2, step(A.slashHigh, 220), step(A.quickLeft, 180), step(A.quickRight, 180), step(A.heavyHigh)),
-      combo(2, step(A.slashLow, 250), step(A.sweep)),
-      combo(2, step(A.quickRight, 160), step(A.quickLeft, 160), step(A.thrust)),
-      combo(1, step(A.sweep)),
-      combo(1, step(A.thrust)),
-    ],
+    // Fast beat, mostly 3-hit strings that end in something you must dodge or a heavy.
+    combos: patterns(180, [2, 3, 4], {
+      1: [[A.sweep], [A.thrust]],
+      2: [[A.slashLow, A.sweep], [A.quickRight, A.thrust]],
+      3: [
+        [A.quickRight, A.quickLeft, A.thrust],
+        [A.slashHigh, A.quickLeft, A.heavyHigh],
+        [A.slashLow, A.slashLeft, A.sweep],
+      ],
+    }),
   },
 ];

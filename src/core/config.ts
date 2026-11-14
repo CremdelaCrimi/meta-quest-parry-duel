@@ -16,6 +16,8 @@ const BASE: Omit<TimingConfig, 'name'> = {
   blockLateMs: 60,
   perfectAngleDeg: 30,
   blockAngleDeg: 45,
+  steadyMs: 50,
+  steadyMaxSpeed: 1.2,
   spamWindowMs: 700,
   spamMaxEntries: 3,
   spamLockoutMs: 450,

@@ -10,6 +10,7 @@ import type {
   DodgeKind,
   DuelEvent,
   EnemyDef,
+  Fault,
   FrameInput,
   GuardConfig,
   Modifiers,
@@ -97,7 +98,10 @@ export class Duel {
   private readonly dodge = new DodgeDetector();
 
   // Scratch objects so step() doesn't allocate.
+  private readonly poseA: SwordPose = makePose();
   private readonly poseB: SwordPose = makePose();
+  /** Last sim time the blade tip moved faster than steadyMaxSpeed (end of that sub-step). */
+  private lastFastT = -Infinity;
   private readonly poseM: SwordPose = makePose();
   private readonly readB: GuardReading = { dir: null, angleErr: 90 };
   private readonly readM: GuardReading = { dir: null, angleErr: 90 };
@@ -172,7 +176,10 @@ export class Duel {
       if (dh) this.onDodge(dh);
 
       // 2. Guard transition, refined to a sub-frame time.
+      lerpPose(this.poseA, inp.swordPrev, inp.swordCurr, fa);
       lerpPose(this.poseB, inp.swordPrev, inp.swordCurr, fb);
+      const tipSpeed = dist(this.poseA.tip, this.poseB.tip) / Math.max(1e-6, (b - a) / 1000);
+      if (tipSpeed > this.cfg.steadyMaxSpeed) this.lastFastT = b;
       classifyGuard(this.poseB, this.guardCfg, this.readB);
       let transT = NaN;
       if (this.readB.dir !== this.guard.dir) {
@@ -204,7 +211,7 @@ export class Duel {
       if (this.pending && b >= this.pending.strikeT + this.grace) {
         const pd = this.pending;
         this.pending = null;
-        this.takeHit(pd.att, pd.strikeT + this.grace);
+        this.takeHit(pd.att, pd.strikeT + this.grace, undefined, ['side']);
       }
 
       // Recomputed: a perfect parry in this sub-step may have started a hit-stop.
@@ -274,17 +281,33 @@ export class Duel {
     }
   }
 
+  /** Has the blade been held still for steadyMs up to time t? */
+  steadyAt(t: number): boolean {
+    return this.cfg.steadyMs <= 0 || t - this.lastFastT >= this.cfg.steadyMs;
+  }
+
+  /**
+   * A parry is judged on three things: timing (guard entry vs the strike), angle (blade square
+   * to the attack) and steadiness (guard held still, not swung into). All three -> perfect.
+   * Otherwise a block if it's not too late and roughly square, else a hit. Faults say why.
+   */
   private judge(att: AttackDef, S: number, entryT: number, angleErr: number, t: number): void {
     const c = this.cfg;
     const offset = entryT - S;
     const early = c.perfectEarlyMs + this.mods.perfectWindowBonusMs;
-    const locked = entryT < this.player.lockoutUntil;
-    if (!locked && offset >= -early && offset <= c.perfectLateMs && angleErr <= c.perfectAngleDeg) {
+    const faults: Fault[] = [];
+    if (offset < -early) faults.push('early');
+    if (offset > c.perfectLateMs) faults.push('late');
+    if (angleErr > c.perfectAngleDeg) faults.push('angle');
+    if (!this.steadyAt(t)) faults.push('shaky');
+    if (entryT < this.player.lockoutUntil) faults.push('locked');
+
+    if (faults.length === 0) {
       this.onPerfect(att, t, offset);
     } else if (offset <= c.blockLateMs && angleErr <= c.blockAngleDeg) {
-      this.onBlock(att, t, offset);
+      this.onBlock(att, t, offset, faults);
     } else {
-      this.takeHit(att, t, offset);
+      this.takeHit(att, t, offset, faults);
     }
   }
 
@@ -308,7 +331,7 @@ export class Duel {
     if (breaks) this.breakEnemy(t);
   }
 
-  private onBlock(att: AttackDef, t: number, offset: number): void {
+  private onBlock(att: AttackDef, t: number, offset: number, faults: Fault[]): void {
     const p = this.player;
     const e = this.enemy;
     const c = this.cfg;
@@ -318,7 +341,7 @@ export class Duel {
     p.postureHitAt = t;
     e.posture += att.postureDamage * c.blockEnemyPostureMult;
     e.postureHitAt = t;
-    this.emit({ type: 'block', t, offsetMs: offset, attackId: att.id, dir: att.dir, damage: dmg });
+    this.emit({ type: 'block', t, offsetMs: offset, attackId: att.id, dir: att.dir, damage: dmg, faults });
     if (p.posture >= c.playerPostureMax) {
       const extra = att.damage * 0.5;
       p.hp -= extra;
@@ -328,7 +351,7 @@ export class Duel {
     this.checkPlayerDead(t);
   }
 
-  private takeHit(att: AttackDef, t: number, offset?: number): void {
+  private takeHit(att: AttackDef, t: number, offset?: number, faults?: Fault[]): void {
     const p = this.player;
     if (p.wardCharges > 0) {
       p.wardCharges--;
@@ -336,7 +359,7 @@ export class Duel {
       return;
     }
     p.hp -= att.damage;
-    this.emit({ type: 'hit', t, offsetMs: offset, attackId: att.id, dir: att.dir, perilous: att.perilous, damage: att.damage });
+    this.emit({ type: 'hit', t, offsetMs: offset, attackId: att.id, dir: att.dir, perilous: att.perilous, damage: att.damage, faults });
     this.checkPlayerDead(t);
   }
 
@@ -534,6 +557,10 @@ export class Duel {
   private emit(ev: DuelEvent): void {
     this.events.push(ev);
   }
+}
+
+function dist(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
 function dodgeBeats(kind: DodgeKind | null, att: AttackDef): boolean {

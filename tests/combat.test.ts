@@ -127,6 +127,43 @@ describe('parry timing', () => {
   });
 });
 
+describe('steadiness and fault breakdown', () => {
+  it('a guard set early and held still is a perfect parry', () => {
+    const d = makeDuel({ steady: true });
+    script(d, L, START);
+    const o = outcome(drive(d, guardAt(POSES.left, S - 110, 10), 2200))!;
+    expect(o.type).toBe('perfect');
+  });
+
+  it('swinging into the guard right at the strike is only a block, flagged shaky', () => {
+    const d = makeDuel({ steady: true });
+    script(d, L, START);
+    // Entry ~S-25, still moving until ~S-10: on time and square, but not held.
+    const o = outcome(drive(d, guardAt(POSES.left, S - 30, 20), 2200))!;
+    expect(o.type).toBe('block');
+    expect(o.faults).toEqual(['shaky']);
+  });
+
+  it('a block reports every fault: too early and not held', () => {
+    const d = makeDuel({ steady: true });
+    script(d, L, START);
+    // Arrives 400 ms early (timing fault), then keeps wiggling into the strike (steadiness fault).
+    const wiggle = schedule([[S - 400, POSES.left], [S - 40, { ...POSES.left, tip: { ...POSES.left.tip, z: POSES.left.tip.z + 0.05 } }]], 30);
+    const o = outcome(drive(d, wiggle, 2200))!;
+    expect(o.type).toBe('block');
+    expect(o.faults).toContain('early');
+    expect(o.faults).toContain('shaky');
+  });
+
+  it('guarding the wrong side is a hit with a side fault', () => {
+    const d = makeDuel({ steady: true });
+    script(d, L, START);
+    const o = outcome(drive(d, guardAt(POSES.right, S - 200), 2200))!;
+    expect(o.type).toBe('hit');
+    expect(o.faults).toEqual(['side']);
+  });
+});
+
 describe('easy preset', () => {
   it('has a 250 ms perfect window that parries what Sekiro-like only blocks', () => {
     expect(PRESET_EASY.perfectEarlyMs + PRESET_EASY.perfectLateMs).toBe(250);

@@ -80,6 +80,13 @@ export interface TimingConfig {
   /** Max blade angle error (degrees from ideal) for perfect / block. */
   perfectAngleDeg: number;
   blockAngleDeg: number;
+  /**
+   * Steadiness: for a perfect parry the blade tip must have moved slower than steadyMaxSpeed
+   * (m/s) for the last steadyMs before the guard is judged. You set your guard and hold it;
+   * swinging into the block isn't a parry. 0 disables the check.
+   */
+  steadyMs: number;
+  steadyMaxSpeed: number;
   /** Anti-spam: more than spamMaxEntries guard entries within spamWindowMs locks out perfect parries. */
   spamWindowMs: number;
   spamMaxEntries: number;
@@ -155,8 +162,17 @@ export type DuelEventType =
   | 'abilityUsed'
   | 'wardAbsorb';
 
+/**
+ * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
+ * early/late: outside the timing window · angle: blade not square to the attack ·
+ * shaky: blade still moving (swung into the guard) · locked: anti-spam lockout · side: wrong guard.
+ */
+export type Fault = 'early' | 'late' | 'angle' | 'shaky' | 'locked' | 'side';
+
 export interface DuelEvent {
   type: DuelEventType;
+  /** On block/hit: everything that kept it from being a perfect parry. */
+  faults?: Fault[];
   /** Sub-frame time the event happened (ms). */
   t: number;
   /** Guard entry minus strike time (ms). Negative = early, positive = late. */

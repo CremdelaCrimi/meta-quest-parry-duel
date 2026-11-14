@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Duel } from '../core/sim';
 import type { AttackDef, SwordPose, V3 } from '../core/types';
-import { DuelSpace, ENEMY_DIST } from './duelSpace';
+import { ATTACK_LUNGE, DuelSpace, ENEMY_DIST } from './duelSpace';
 import { RiggedEnemy } from './riggedEnemy';
 
 const D = ENEMY_DIST;
@@ -208,11 +208,65 @@ export class EnemyView {
     }
   }
 
+  /** Current step-in toward the player (m), eased so combos never snap. */
+  private lunge = 0;
+  private readonly trail = new SwingTrail();
+  private trailClock = 0;
+  /** One pip per hit in the current pattern (1, 2 or 3), lit as each hit lands. */
+  private readonly pips = [0, 1, 2].map(() => new THREE.Mesh(new THREE.SphereGeometry(0.025, 10, 8), new THREE.MeshBasicMaterial()));
+
+  private updatePips(e: Duel['enemy'], space: DuelSpace, Dz: number): void {
+    const n = e.state === 'attack' && e.combo ? e.combo.steps.length : 0;
+    this.pips.forEach((pip, i) => {
+      if (!pip.parent) this.root.add(pip);
+      pip.visible = i < n;
+      if (!pip.visible) return;
+      DuelSpace.toLocal({ x: (i - (n - 1) / 2) * 0.09, y: -space.height + 2.13, z: Dz }, pip.position);
+      const done = i < e.stepIndex || (i === e.stepIndex && e.struck);
+      const mat = pip.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(done ? 0xffd34d : i === e.stepIndex ? 0xffffff : 0x555a66);
+    });
+  }
+
+  /** Record the blade's sweep from late windup to just after the strike; it lingers and fades. */
+  private updateTrail(duel: Duel, dtMs: number): void {
+    this.trailClock += dtMs;
+    if (!this.trail.mesh.parent) this.root.add(this.trail.mesh);
+    const e = duel.enemy;
+    const att = duel.currentAttack;
+    const blade = this.rigged?.blade ?? this.blade;
+    if (att && e.state === 'attack') {
+      const since = e.clock - e.attackStart;
+      const w = duel.windup(att);
+      if (since > w * 0.55 && since < w + 220) {
+        blade.updateWorldMatrix(true, false);
+        const inner = this.root.worldToLocal(blade.localToWorld(this.v1.set(0, 0.35, 0)));
+        const outer = this.root.worldToLocal(blade.localToWorld(this.v2.set(0, 1, 0)));
+        this.trail.push(inner, outer, this.trailClock, att.perilous !== 'none' ? 0xff3030 : 0xbfe0ff);
+      }
+    }
+    this.trail.update(this.trailClock);
+  }
+
   /** Swept test: does the segment a->b (world) pass within `r` of the enemy body axis? */
   bodyHit(a: THREE.Vector3, b: THREE.Vector3, space: DuelSpace, r = 0.27): boolean {
-    const feet = space.toWorld({ x: 0, y: -space.height + 0.2, z: D }, this.v1);
-    const head = space.toWorld({ x: 0, y: -space.height + 1.7, z: D }, this.v2);
+    const z = D - this.lunge;
+    const feet = space.toWorld({ x: 0, y: -space.height + 0.2, z }, this.v1);
+    const head = space.toWorld({ x: 0, y: -space.height + 1.7, z }, this.v2);
     return segSegDist(a, b, feet, head) < r;
+  }
+
+  /** Step in through the late windup and hold through the strike, then ease back during recovery. */
+  private updateLunge(duel: Duel, animMs: number): void {
+    const e = duel.enemy;
+    const att = duel.currentAttack;
+    let target = 0;
+    if (att && e.state === 'attack') {
+      const since = e.clock - e.attackStart;
+      const w = duel.windup(att);
+      target = since > w * 0.4 && since < w + 300 ? ATTACK_LUNGE : 0;
+    }
+    this.lunge += (target - this.lunge) * (1 - Math.exp((-7 * animMs) / 1000));
   }
 
   update(duel: Duel, space: DuelSpace, dtMs: number): void {
@@ -224,8 +278,10 @@ export class EnemyView {
     const frozen = duel.time >= duel.player.hitStopFrom && duel.time < duel.player.hitStopUntil;
     const animMs = frozen ? 0 : dtMs;
 
-    // Body stands on the floor at the enemy position.
-    DuelSpace.toLocal({ x: 0, y: -space.height, z: D }, this.body.position);
+    // Body stands on the floor at the enemy position, stepped in while attacking.
+    this.updateLunge(duel, animMs);
+    const Dz = D - this.lunge;
+    DuelSpace.toLocal({ x: 0, y: -space.height, z: Dz }, this.body.position);
 
     if (e.state === 'dead') {
       this.deadT += dtMs;
@@ -264,7 +320,7 @@ export class EnemyView {
     placeSegment(this.blade, hilt, tip, this.v3);
     const shoulderY = -space.height + 1.45;
     for (let i = 0; i < 2; i++) {
-      const sh = DuelSpace.toLocal({ x: i === 0 ? -0.2 : 0.2, y: shoulderY, z: D - 0.02 }, this.v2);
+      const sh = DuelSpace.toLocal({ x: i === 0 ? -0.2 : 0.2, y: shoulderY, z: Dz - 0.02 }, this.v2);
       placeSegment(this.arms[i], sh, hilt, this.v3);
     }
 
@@ -272,7 +328,7 @@ export class EnemyView {
     const peril = !!att && att.perilous !== 'none' && !e.struck;
     this.perilMark.visible = peril;
     if (peril) {
-      DuelSpace.toLocal({ x: 0, y: -space.height + 2.05, z: D }, this.perilMark.position);
+      DuelSpace.toLocal({ x: 0, y: -space.height + 2.05, z: Dz }, this.perilMark.position);
       this.perilMark.rotation.y += dtMs * 0.004;
     }
     const glow = att && !e.struck ? Math.min(1, Math.max(0, p)) : 0;
@@ -286,15 +342,16 @@ export class EnemyView {
     }
 
     this.deathMark.visible = e.state === 'stagger';
-    if (this.deathMark.visible) DuelSpace.toLocal({ x: 0, y: -space.height + 1.25, z: D - 0.24 }, this.deathMark.position);
+    if (this.deathMark.visible) DuelSpace.toLocal({ x: 0, y: -space.height + 1.25, z: Dz - 0.24 }, this.deathMark.position);
 
     // Bars above the head.
     const top = -space.height + 2.0;
     const pf = Math.min(1, e.posture / e.def.postureMax);
-    DuelSpace.toLocal({ x: -0.3, y: top, z: D }, this.postureBar.position);
+    DuelSpace.toLocal({ x: -0.3, y: top, z: Dz }, this.postureBar.position);
     this.postureBar.scale.set(Math.max(0.001, 0.6 * pf), 0.035, 1);
     this.postureMat.color.setHex(pf > 0.75 ? 0xff5a1a : 0xffb020);
-    DuelSpace.toLocal({ x: -0.3, y: top - 0.05, z: D }, this.hpBar.position);
+    DuelSpace.toLocal({ x: -0.3, y: top - 0.05, z: Dz }, this.hpBar.position);
+    this.updatePips(e, space, Dz);
     this.hpBar.scale.set(Math.max(0.001, (0.6 * e.hp) / e.def.hp), 0.02, 1);
     this.postureBar.visible = this.hpBar.visible = e.state !== 'dead';
 
@@ -305,6 +362,69 @@ export class EnemyView {
       this.rigged.root.position.copy(this.body.position);
       this.rigged.update(duel, animMs, this.hitFlash);
     }
+    this.updateTrail(duel, dtMs);
+  }
+}
+
+/**
+ * A fading ribbon behind the enemy's blade, so the player can read the path a swing took and
+ * learn the move. Samples are in the enemy root's space; each lives TRAIL_MS then fades out.
+ */
+const TRAIL_MS = 700;
+const TRAIL_MAX = 48;
+
+class SwingTrail {
+  readonly mesh: THREE.Mesh;
+  private readonly samples: Array<{ a: THREE.Vector3; b: THREE.Vector3; t: number }> = [];
+  private readonly pos = new Float32Array(TRAIL_MAX * 2 * 3);
+  private readonly col = new Float32Array(TRAIL_MAX * 2 * 4);
+  private readonly geo = new THREE.BufferGeometry();
+  private readonly color = new THREE.Color();
+
+  constructor() {
+    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
+    const idx: number[] = [];
+    for (let i = 0; i < TRAIL_MAX - 1; i++) {
+      const a = i * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    this.geo.setIndex(idx);
+    this.mesh = new THREE.Mesh(
+      this.geo,
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }),
+    );
+    this.mesh.frustumCulled = false;
+  }
+
+  push(a: THREE.Vector3, b: THREE.Vector3, t: number, hex: number): void {
+    const last = this.samples[this.samples.length - 1];
+    if (last && last.b.distanceTo(b) < 0.01) return; // only record actual motion
+    this.samples.push({ a: a.clone(), b: b.clone(), t });
+    if (this.samples.length > TRAIL_MAX) this.samples.shift();
+    this.color.setHex(hex);
+  }
+
+  update(now: number): void {
+    while (this.samples.length && now - this.samples[0].t > TRAIL_MS) this.samples.shift();
+    const n = this.samples.length;
+    this.samples.forEach((s, i) => {
+      const fade = Math.pow(1 - (now - s.t) / TRAIL_MS, 1.5);
+      s.a.toArray(this.pos, i * 6);
+      s.b.toArray(this.pos, i * 6 + 3);
+      // Inner edge faint, outer (tip) edge bright.
+      for (const [k, alpha] of [[0, 0.1 * fade], [1, 0.75 * fade]] as const) {
+        const o = (i * 2 + k) * 4;
+        this.col[o] = this.color.r;
+        this.col[o + 1] = this.color.g;
+        this.col[o + 2] = this.color.b;
+        this.col[o + 3] = alpha;
+      }
+    });
+    this.geo.attributes.position.needsUpdate = true;
+    this.geo.attributes.color.needsUpdate = true;
+    this.geo.setDrawRange(0, Math.max(0, n - 1) * 6);
+    this.mesh.visible = n > 1;
   }
 }
 

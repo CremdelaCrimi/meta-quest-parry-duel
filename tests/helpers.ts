@@ -26,9 +26,14 @@ export const TEST_ENEMY: EnemyDef = {
   combos: [],
 };
 
-export function makeDuel(opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number } = {}): Duel {
+/**
+ * Test duel. Steadiness is off unless `steady: true`, so timing tests (whose scripted guards
+ * snap into place just before the strike) measure timing alone; steadiness has its own tests.
+ */
+export function makeDuel(opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number; steady?: boolean } = {}): Duel {
+  const timing = opts.timing ?? PRESET_SEKIRO_LIKE;
   return new Duel({
-    timing: opts.timing ?? PRESET_SEKIRO_LIKE,
+    timing: opts.steady ? timing : { ...timing, steadyMs: 0 },
     guard: DEFAULT_GUARD,
     enemy: opts.enemy ?? TEST_ENEMY,
     mods: defaultModifiers(),
