@@ -43,5 +43,29 @@ face each other, so a cut that lands on the player's left starts from the enemy'
 | `stagger` | posture broken | Off balance after the guard is broken: stumble back a little in place, sword arm dropped low, head down, swaying, struggling to recover. Seamless loop. |
 | `death` | killed | Collapse forward onto the knees, then fall to the side and lie still. Holds the last frame. |
 
+## Round 2 (v2, 3 s clips) and findings
+
+Five clips were regenerated with a one-handed katana, left arm at the side, and an explicit timeline
+(0-0.6 s guard, 0.6-1.4 s wind-up, 1.4-1.7 s strike, 1.7-3.0 s recover). Only `idle_v2` was an
+improvement and is used. Text-to-motion keeps the gist of a prompt but not sword mechanics:
+
+| Clip | v1 | v2 |
+|---|---|---|
+| idle | wide crouch | **good: upright guard (used)** |
+| overhead | chest-height sweep | raises the empty LEFT arm |
+| heavy_overhead | lift only | hunched, blade wanders behind shoulders |
+| thrust | lunge before impact | sideways swing, no forward stab |
+| low_cut | crouch, no cut | unclear |
+| slash_r2l, slash_l2r, head_sweep | **good (used)** | - |
+
+It also ignored the 3 s duration on some clips. Better sources for the remaining attacks:
+Tripo's preset motion library (`preset:` combat actions, 10 credits each) or Mixamo's free sword
+mocap; the rig already uses Mixamo bone names, so those clips bind with no retargeting.
+
+Export each clip from its node's **Export** panel (GLB, 1k, Export Skeleton on, Number of
+Animations = 1, stay in place). The agent's own "export" converts to a static mesh with no rig.
+Select nodes by their thumbnail: clicking the middle of an expanded node can hit its
+**Generate · 20** button.
+
 After export, mark each attack clip's `releaseMs` (wind-up ends, fast motion starts) and
 `impactMs` (blade at full extension) in `public/enemy/enemy.json`.

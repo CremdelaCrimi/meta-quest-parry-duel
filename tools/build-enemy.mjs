@@ -26,6 +26,18 @@ const ATTACK_CLIPS = {
   sweep: 'head_sweep',
 };
 
+/**
+ * Direction the strike travels, in model space (+Y up, +Z toward the player). The swing is the
+ * peak of hand speed along this direction, so a fast wind-up lift can't be mistaken for the cut.
+ * Clips not listed (sideways slashes) use raw speed.
+ */
+const STRIKE_DIR = {
+  overhead: [0, -1, 0],
+  heavy_overhead: [0, -1, 0],
+  thrust: [0, 0, 1],
+  low_cut: [1, 0, 0], // the model faces +Z, so its right-to-left is +X
+};
+
 // ------------------------------------------------------------------ GLB io
 
 function readGlb(file) {
@@ -149,6 +161,10 @@ function handPath(anim, fps = 120) {
   const dur = Math.max(...tracks.map((t) => t.times[t.times.length - 1]));
   const chain = [];
   for (let n = hand; n !== undefined; n = parent.get(n)) chain.unshift(n);
+  // Blade tip in hand space: same grip as the game (pinky knuckle -> index knuckle), half the
+  // model's height long. Wrist rotation swings the tip far more than it moves the hand.
+  const knuckle = (suffix) => new Vector3().fromArray(g.nodes[nodeByName.get('mixamorig:RightHand' + suffix)].translation);
+  const tipLocal = knuckle('Index1').sub(knuckle('Pinky1')).normalize().multiplyScalar(0.5);
   const pts = [];
   for (let i = 0; i <= dur * fps; i++) {
     const t = i / fps;
@@ -165,7 +181,7 @@ function handPath(anim, fps = 120) {
       }
       m.multiply(new Matrix4().compose(p, q, s));
     }
-    pts.push(new Vector3().setFromMatrixPosition(m));
+    pts.push(tipLocal.clone().applyMatrix4(m));
   }
   return { pts, fps, dur };
 }
@@ -177,18 +193,30 @@ function handPath(anim, fps = 120) {
  */
 function marks(anim) {
   const { pts, fps, dur } = handPath(anim);
-  const raw = pts.map((p, i) => (i ? p.distanceTo(pts[i - 1]) * fps : 0));
+  const dir = STRIKE_DIR[anim.name] && new Vector3(...STRIKE_DIR[anim.name]);
+  const raw = pts.map((p, i) => {
+    if (!i) return 0;
+    const v = p.clone().sub(pts[i - 1]).multiplyScalar(fps);
+    return dir ? Math.max(0, v.dot(dir)) : v.length();
+  });
   const w = Math.round(fps * 0.04);
   const speed = raw.map((_, i) => {
     const s = raw.slice(Math.max(0, i - w), i + w + 1);
     return s.reduce((a, b) => a + b, 0) / s.length;
   });
-  const lo = Math.round(fps * 0.2);
+  let lo = Math.round(fps * 0.2);
   const hi = Math.round(fps * (dur - 0.3));
+  if (dir) {
+    // Directional strikes: the swing starts from the wind-up extreme, the point where the hand
+    // is furthest against the strike direction (highest for a chop, furthest back for a thrust).
+    let top = lo;
+    for (let i = lo; i < hi; i++) if (pts[i].dot(dir) < pts[top].dot(dir)) top = i;
+    lo = top;
+  }
   let peak = lo;
   for (let i = lo; i < hi; i++) if (speed[i] > speed[peak]) peak = i;
   let rel = peak;
-  while (rel > 0 && speed[rel] > speed[peak] * 0.2) rel--;
+  while (rel > lo && speed[rel] > speed[peak] * 0.2) rel--;
   return {
     releaseMs: Math.round((rel / fps) * 1000),
     impactMs: Math.round((peak / fps) * 1000),
@@ -229,4 +257,4 @@ writeFileSync(join(outDir, 'enemy.json'), JSON.stringify(manifest, null, 2) + '\
 
 console.log(`wrote ${join(outDir, 'swordsman.glb')} (${(allBin.length / 1e6).toFixed(2)} MB bin, ${g.animations.length} clips)`);
 for (const [clip, m] of Object.entries(measured))
-  console.log(`  ${clip.padEnd(15)} release ${String(m.releaseMs).padStart(4)} ms  impact ${String(m.impactMs).padStart(4)} ms  peak hand speed ${m.peakSpeed}`);
+  console.log(`  ${clip.padEnd(15)} release ${String(m.releaseMs).padStart(4)} ms  impact ${String(m.impactMs).padStart(4)} ms  peak blade-tip speed ${m.peakSpeed}`);

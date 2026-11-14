@@ -9,48 +9,48 @@
   "attacks": {
     "slashLeft": {
       "clip": "slash_r2l",
-      "releaseMs": 1608,
-      "impactMs": 1833
+      "releaseMs": 1667,
+      "impactMs": 1800
     },
     "quickLeft": {
       "clip": "slash_r2l",
-      "releaseMs": 1608,
-      "impactMs": 1833
+      "releaseMs": 1667,
+      "impactMs": 1800
     },
     "slashRight": {
       "clip": "slash_l2r",
-      "releaseMs": 1958,
-      "impactMs": 2217
+      "releaseMs": 1075,
+      "impactMs": 1458
     },
     "quickRight": {
       "clip": "slash_l2r",
-      "releaseMs": 1958,
-      "impactMs": 2217
+      "releaseMs": 1075,
+      "impactMs": 1458
     },
     "slashHigh": {
       "clip": "overhead",
-      "releaseMs": 342,
-      "impactMs": 592
+      "releaseMs": 2292,
+      "impactMs": 2383
     },
     "heavyHigh": {
       "clip": "heavy_overhead",
-      "releaseMs": 1342,
-      "impactMs": 1508
+      "releaseMs": 1575,
+      "impactMs": 1667
     },
     "slashLow": {
       "clip": "low_cut",
-      "releaseMs": 517,
-      "impactMs": 708
+      "releaseMs": 825,
+      "impactMs": 1000
     },
     "thrust": {
       "clip": "thrust",
-      "releaseMs": 1925,
-      "impactMs": 2208
+      "releaseMs": 1100,
+      "impactMs": 1258
     },
     "sweep": {
       "clip": "head_sweep",
-      "releaseMs": 608,
-      "impactMs": 1175
+      "releaseMs": 842,
+      "impactMs": 1217
     }
   }
 }
