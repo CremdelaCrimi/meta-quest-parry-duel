@@ -29,23 +29,23 @@
     },
     "slashHigh": {
       "clip": "overhead",
-      "releaseMs": 2292,
-      "impactMs": 2383
+      "releaseMs": 575,
+      "impactMs": 667
     },
     "heavyHigh": {
       "clip": "heavy_overhead",
-      "releaseMs": 1575,
-      "impactMs": 1667
+      "releaseMs": 858,
+      "impactMs": 950
     },
     "slashLow": {
       "clip": "low_cut",
-      "releaseMs": 825,
-      "impactMs": 1000
+      "releaseMs": 575,
+      "impactMs": 825
     },
     "thrust": {
       "clip": "thrust",
-      "releaseMs": 1100,
-      "impactMs": 1258
+      "releaseMs": 1983,
+      "impactMs": 2133
     },
     "sweep": {
       "clip": "head_sweep",

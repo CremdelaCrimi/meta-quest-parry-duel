@@ -9,6 +9,7 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { Matrix4, Quaternion, Vector3 } from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 const [clipsDir, outDir] = process.argv.slice(2);
 if (!clipsDir || !outDir) throw new Error('usage: node tools/build-enemy.mjs <clips-dir> <out-dir>');
@@ -35,7 +36,6 @@ const STRIKE_DIR = {
   overhead: [0, -1, 0],
   heavy_overhead: [0, -1, 0],
   thrust: [0, 0, 1],
-  low_cut: [1, 0, 0], // the model faces +Z, so its right-to-left is +X
 };
 
 // ------------------------------------------------------------------ GLB io
@@ -86,6 +86,7 @@ function readAccessor(g, bin, i) {
 // ------------------------------------------------------------------ merge
 
 const files = readdirSync(clipsDir).filter((f) => f.endsWith('.glb'));
+// A <clip>.fbx (Mixamo) replaces a <clip>.glb of the same name.
 if (!files.includes('idle.glb')) throw new Error('idle.glb (the base) is missing');
 const base = readGlb(join(clipsDir, 'idle.glb'));
 const g = base.json;
@@ -95,7 +96,79 @@ const nodeByName = new Map(g.nodes.map((n, i) => [n.name, i]));
 
 g.animations = [{ ...g.animations[0], name: 'idle' }];
 
-for (const f of files.filter((x) => x !== 'idle.glb').sort()) {
+/** Append raw float data as a new accessor in the base buffer. */
+function addAccessor(data, type, minmax = false) {
+  const buf = Buffer.from(new Float32Array(data).buffer);
+  const align = (4 - (binLen % 4)) % 4;
+  if (align) {
+    chunks.push(Buffer.alloc(align));
+    binLen += align;
+  }
+  g.bufferViews.push({ buffer: 0, byteOffset: binLen, byteLength: buf.length });
+  chunks.push(buf);
+  binLen += buf.length;
+  const acc = { bufferView: g.bufferViews.length - 1, componentType: 5126, count: data.length / COMPONENTS[type], type };
+  if (minmax) Object.assign(acc, { min: [Math.min(...data)], max: [Math.max(...data)] });
+  g.accessors.push(acc);
+  return g.accessors.length - 1;
+}
+
+/**
+ * Mixamo FBX ("Without Skin", Mixamo rig) -> glTF animation on the base skeleton. Tracks bind by
+ * bone name (three sanitizes "mixamorig:Hips" to "mixamorigHips"). Rotations are used as-is;
+ * hip translation is rescaled from Mixamo centimetres to the base rig's hip height.
+ */
+function addFbxClip(clip, file) {
+  const ab = readFileSync(file);
+  const fbx = new FBXLoader().parse(ab.buffer.slice(ab.byteOffset, ab.byteOffset + ab.length), '');
+  const anim = fbx.animations[0];
+  if (!anim) throw new Error(`${file}: no animation`);
+  const bySanitized = new Map(g.nodes.map((n, i) => [String(n.name).replace(/[:.\s]/g, ''), i]));
+  const hipsIdx = nodeByName.get('mixamorig:Hips');
+  const hipsTrack = anim.tracks.find((t) => t.name === 'mixamorigHips.position');
+  const hipScale = hipsTrack ? (g.nodes[hipsIdx].translation?.[1] ?? 1) / hipsTrack.values[1] : 1;
+  const samplers = [];
+  const channels = [];
+  for (const t of anim.tracks) {
+    const [bone, prop] = t.name.split('.');
+    const node = bySanitized.get(bone);
+    if (node === undefined) continue;
+    let path, type, values;
+    if (prop === 'quaternion' && node === hipsIdx) {
+      // Mixamo's root orientation differs from the base rig's: rotate every hips key so the
+      // clip's first frame lines up with the base rig's rest hips (fixes facing backwards).
+      const rest = new Quaternion().fromArray(g.nodes[hipsIdx].rotation ?? [0, 0, 0, 1]);
+      const corr = rest.multiply(new Quaternion().fromArray(t.values, 0).invert());
+      const v = Array.from(t.values);
+      for (let i = 0; i < v.length; i += 4) corr.clone().multiply(new Quaternion().fromArray(v, i)).toArray(v, i);
+      [path, type, values] = ['rotation', 'VEC4', v];
+    } else if (prop === 'quaternion') [path, type, values] = ['rotation', 'VEC4', t.values];
+    else if (prop === 'position' && node === hipsIdx) {
+      // In place: keep the vertical bob, pin horizontal travel to the first frame.
+      const v = t.values.map((x) => x * hipScale);
+      for (let i = 0; i < v.length; i += 3) {
+        v[i] = v[0];
+        v[i + 2] = v[2];
+      }
+      [path, type, values] = ['translation', 'VEC3', v];
+    }
+    else continue; // other bones keep their rest offsets; scale tracks unused
+    samplers.push({ input: addAccessor(t.times, 'SCALAR', true), output: addAccessor(values, type), interpolation: 'LINEAR' });
+    channels.push({ sampler: samplers.length - 1, target: { node, path } });
+  }
+  g.animations.push({ name: clip, samplers, channels });
+  return channels.length;
+}
+
+const fbxFiles = readdirSync(clipsDir).filter((x) => x.endsWith('.fbx')).sort();
+const fbxClips = new Set(fbxFiles.map((f) => basename(f, '.fbx')));
+if (fbxClips.has('idle')) g.animations = []; // idle.glb still supplies the mesh; idle.fbx the motion
+for (const f of fbxFiles) {
+  const clip = basename(f, '.fbx');
+  console.log(`  ${clip}: ${addFbxClip(clip, join(clipsDir, f))} tracks from Mixamo FBX`);
+}
+
+for (const f of files.filter((x) => x !== 'idle.glb' && !fbxClips.has(basename(x, '.glb'))).sort()) {
   const clip = basename(f, '.glb');
   const src = readGlb(join(clipsDir, f));
   const anim = src.json.animations?.[0];

@@ -61,6 +61,8 @@ function placeGrip(blade: THREE.Object3D, hand: THREE.Object3D, scene: THREE.Obj
  */
 export class RiggedEnemy {
   readonly root = new THREE.Group();
+  /** The sword mesh (unit length along +Y before scaling), or null if the rig had no hand bone. */
+  blade: THREE.Mesh | null = null;
   private readonly mixer: THREE.AnimationMixer;
   private readonly actions = new Map<string, THREE.AnimationAction>();
   private readonly timeMs = new Map<string, number>();
@@ -104,6 +106,7 @@ export class RiggedEnemy {
       const hs = hand.getWorldScale(new THREE.Vector3()).x;
       blade.scale.set(1 / hs, m.swordLengthM / hs, 1 / hs); // real-world size whatever the rig's scale
       hand.add(blade);
+      this.blade = blade;
       const manual = m.swordOffset !== undefined || m.swordEulerDeg !== undefined;
       if (manual || !placeGrip(blade, hand, scene, m.handBone)) {
         blade.position.set(...(m.swordOffset ?? [0, 0, 0])).multiplyScalar(1 / hs);
