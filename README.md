@@ -6,7 +6,7 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–3 pick boon, P preset, R recalibrate.
+  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, P preset, R recalibrate.
 
 ## Controls (Quest)
 There is no block or attack button: the sword does both. A how-to-play panel sits on your right
@@ -16,7 +16,7 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 |---|---|
 | Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
 | Swing into enemy | **Strike**. While he waits he guards one side: hit the side his sword isn't on (green ring). Lands anywhere while he swings; counter after a perfect parry; finisher when posture breaks |
-| Lean / duck | Dodge. Not needed yet: the current enemies only use blockable swings |
+| Lean / duck | **Dodge** the red must-dodge attacks: lean out of a thrust, duck under a sweep (Duelist and Sentinel) |
 | Left grip, hand on the handle | **Two-handed grip** (see below) |
 | X | Ward: absorb the next hit (every run starts with it) |
 | Left trigger | Time Sigil (once picked up) |
@@ -78,6 +78,29 @@ your HP and posture strip follows the bottom of your view; the edge of vision gl
 below 25% HP, orange when your posture is over 75%. Swing names show in the Trainer fight only
 (`?callouts=1` keeps them); otherwise the line above the enemy shows how your last guard went.
 Stats appear on the victory/death screens (A / H shows them mid-fight).
+
+**Loadout:** after you start, pick a weapon, then a free starting relic (touch a card with the blade
+and pull the trigger, or 1–6 on desktop). Your last picks are remembered and tagged "last time";
+`?loadout=0` skips the screens and reuses them. Weapons are in `src/core/loadout.ts`:
+
+| | Blade | Damage | Strike cooldown | Other |
+|---|---|---|---|---|
+| Katana | 0.88 m | ×1 | ×1 | the baseline |
+| Odachi | 1.10 m | ×1.35 | ×1.5 | +20% parry posture damage |
+| Wakizashi | 0.60 m | ×0.75 | ×0.6 | +20 ms perfect window, +40% counter damage |
+
+Relics are the boons Time Sigil, Keen Eye, Fleet Step, Vigor, Blood Deflect and Iron Wrist (`RELIC_IDS`).
+
+**Dodges:** the Duelist adds a thrust and the Sentinel a sweep, both glowing red, always named above
+him, and unblockable. Lean (thrust) or duck (sweep) just before it lands; a clean dodge opens the same
+counter window as a perfect parry (gold ring, "DODGED · COUNTER NOW!") and flashes the edge of view blue.
+
+**Enemy body language:** he coils a little further back just before a swing commits, his torso
+twists into the windup and unwinds through the cut, and his blade reacts to how it went: a perfect
+parry knocks it back up and rocks him back, a block leans on your guard for a moment, and a hit or
+a dodge lets it follow through past you. Tune in `src/render/views.ts` (`COIL_M`, `TWIST_*`, `REACT_MS`).
+Perfects, posture breaks, finishers, wards and opening hits also throw a shockwave ring; in VR your own
+blade leaves a ribbon on fast swings (gold while a counter is open). See `docs/clips/10_enemy_reactions_dodge.gif`.
 
 Enemies attack in 1-, 2- and 3-hit strings with a fixed rhythm per enemy (`src/core/enemies.ts`);
 pips above the head show the string length. Each swing leaves a fading trail so you can learn its path.

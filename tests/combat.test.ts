@@ -4,6 +4,7 @@ import { DodgeDetector } from '../src/core/dodge';
 import { ATTACKS, ENEMIES } from '../src/core/enemies';
 import { classifyGuard } from '../src/core/guard';
 import type { GuardReading } from '../src/core/guard';
+import { RELICS, WEAPONS } from '../src/core/loadout';
 import { Run } from '../src/core/roguelite';
 import { POSES, TEST_ENEMY, drive, guardAt, makeDuel, outcome, schedule, script } from './helpers';
 
@@ -276,6 +277,14 @@ describe('perilous attacks and dodges', () => {
     expect(outcome(drive(d2, () => POSES.neutral, 2500, 90, { headAt: duck(TS - 200) }))?.type).toBe('dodged');
   });
 
+  it('a clean dodge opens a counter window', () => {
+    const d = makeDuel();
+    script(d, T, START);
+    drive(d, () => POSES.neutral, TS + 50, 90, { headAt: lean(TS - 200) });
+    expect(d.player.counterUntil).toBeGreaterThan(TS);
+    expect(d.opening).toBe('all');
+  });
+
   it('dodging too early runs out of i-frames', () => {
     const d = makeDuel();
     script(d, T, START);
@@ -359,17 +368,20 @@ describe('roguelite run', () => {
     for (let i = 0; i < 20; i++) expect(run.offer().some((p) => p.id === 'ward')).toBe(false);
   });
 
-  it('starts with the Trainer and only uses the three swing shapes', () => {
+  it('starts with the Trainer; must-dodge attacks only from the Duelist on', () => {
     const run = new Run(1);
     expect(run.enemyForFight().name).toBe('Trainer');
-    for (const e of ENEMIES) {
+    for (const [i, e] of ENEMIES.entries()) {
       for (const c of e.combos) {
         for (const s of c.steps) {
-          expect(s.attack.perilous).toBe('none');
-          expect(['vertical', 'horizontal', 'diagonal']).toContain(s.attack.swing);
+          if (s.attack.perilous !== 'none') expect(i).toBeGreaterThanOrEqual(2);
+          else expect(['vertical', 'horizontal', 'diagonal']).toContain(s.attack.swing);
         }
       }
     }
+    const perilous = (e: (typeof ENEMIES)[number]) => new Set(e.combos.flatMap((c) => c.steps.map((s) => s.attack.perilous)));
+    expect(perilous(ENEMIES[2]).has('thrust')).toBe(true);
+    expect(perilous(ENEMIES[3]).has('sweep')).toBe(true);
     run.fight = ENEMIES.length;
     expect(run.enemyForFight().name).not.toContain('Trainer');
   });
@@ -535,5 +547,37 @@ describe('two-handed grip', () => {
     expect(d.steadyLimit).toBe(c.steadyMaxSpeed);
     drive(d, () => POSES.neutral, d.time + 20, 90, { twoHanded: true });
     expect(d.steadyLimit).toBe(c.twoHandSteadyMaxSpeed);
+  });
+});
+
+describe('loadout', () => {
+  const w = (id: string) => WEAPONS.find((x) => x.id === id)!;
+
+  it('the katana changes nothing', () => {
+    const plain = new Run(1);
+    const run = new Run(1);
+    run.equip(w('katana'));
+    expect(run.mods).toEqual(plain.mods);
+  });
+
+  it('weapons trade damage against speed', () => {
+    const odachi = new Run(1);
+    odachi.equip(w('odachi'));
+    const waki = new Run(1);
+    waki.equip(w('wakizashi'));
+    expect(odachi.mods.playerDamageMult).toBeGreaterThan(1);
+    expect(w('odachi').strikeCooldownMult).toBeGreaterThan(1);
+    expect(waki.mods.playerDamageMult).toBeLessThan(1);
+    expect(waki.mods.perfectWindowBonusMs).toBeGreaterThan(0);
+    expect(w('wakizashi').strikeCooldownMult).toBeLessThan(1);
+  });
+
+  it('the starting relic is a free boon stack', () => {
+    const run = new Run(1);
+    run.equip(w('katana'), RELICS.find((r) => r.id === 'slowTime'));
+    expect(run.mods.abilities).toContain('slowTime');
+    expect(run.stacks.slowTime).toBe(1);
+    // A one-stack relic is then never offered again.
+    for (let i = 0; i < 20; i++) expect(run.offer().some((p) => p.id === 'slowTime')).toBe(false);
   });
 });

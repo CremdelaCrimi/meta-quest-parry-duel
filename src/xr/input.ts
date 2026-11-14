@@ -336,7 +336,7 @@ export class DesktopInput implements InputDevice {
     f.btnA = pk.has('h');
     f.btnB = pk.has('r');
     f.btnY = pk.has('p');
-    f.choose = pk.has('1') ? 0 : pk.has('2') ? 1 : pk.has('3') ? 2 : -1;
+    f.choose = ['1', '2', '3', '4', '5', '6'].findIndex((k) => pk.has(k));
     pk.clear();
     this.click = false;
   }

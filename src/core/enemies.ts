@@ -32,7 +32,8 @@ export const ATTACKS = {
   diagRight: atk('diagRight', 'right', 620, { swing: 'diagonal' }),
   quickDiagLeft: atk('quickDiagLeft', 'left', 400, { swing: 'diagonal', ...quick }),
   quickDiagRight: atk('quickDiagRight', 'right', 400, { swing: 'diagonal', ...quick }),
-  // Not used by the current enemies (kept for later): low cut and the must-dodge attacks.
+  // Must-dodge (red glow, can't be blocked): lean out of a thrust, duck under a sweep.
+  // A clean dodge opens him up like a perfect parry. The low cut is still unused.
   slashLow: atk('slashLow', 'low', 620),
   thrust: atk('thrust', 'high', 900, { perilous: 'thrust', damage: 26, postureDamage: 0, recoverMs: 900 }),
   sweep: atk('sweep', 'high', 900, { perilous: 'sweep', damage: 26, postureDamage: 0, recoverMs: 900 }),
@@ -62,8 +63,8 @@ function patterns(
   return out;
 }
 
-// Every enemy uses only the three swing shapes (vertical, horizontal, diagonal) for now.
-// Low cuts and the must-dodge thrust/sweep come back once the basics read clearly.
+// Trainer and Ronin use only the three swing shapes. The Duelist adds the thrust (lean) and the
+// Sentinel adds the sweep (duck) as well, each as a string finisher, so you learn one at a time.
 export const ENEMIES: EnemyDef[] = [
   {
     name: 'Trainer',
@@ -101,8 +102,8 @@ export const ENEMIES: EnemyDef[] = [
     idleMinMs: 700,
     idleMaxMs: 1300,
     combos: patterns(260, [2, 3, 3], {
-      1: [[A.heavyHigh], [A.diagLeft]],
-      2: [[A.quickLeft, A.quickRight], [A.diagLeft, A.slashHigh]],
+      1: [[A.heavyHigh], [A.diagLeft], [A.thrust]],
+      2: [[A.quickLeft, A.quickRight], [A.diagLeft, A.slashHigh], [A.slashRight, A.thrust]],
       3: [
         [A.quickLeft, A.quickRight, A.slashHigh],
         [A.diagRight, A.diagLeft, A.slashRight],
@@ -118,8 +119,8 @@ export const ENEMIES: EnemyDef[] = [
     idleMaxMs: 1100,
     // Fast beat, mostly 3-hit strings ending in a heavy.
     combos: patterns(200, [2, 3, 4], {
-      1: [[A.heavyHigh], [A.diagRight]],
-      2: [[A.quickDiagLeft, A.quickDiagRight], [A.quickRight, A.heavyHigh]],
+      1: [[A.heavyHigh], [A.diagRight], [A.sweep]],
+      2: [[A.quickDiagLeft, A.quickDiagRight], [A.quickRight, A.heavyHigh], [A.quickLeft, A.thrust], [A.slashHigh, A.sweep]],
       3: [
         [A.quickRight, A.quickLeft, A.heavyHigh],
         [A.quickDiagLeft, A.quickDiagRight, A.slashHigh],

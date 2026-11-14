@@ -35,6 +35,7 @@ export class SwordView {
     const blade = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.035, len), this.bladeMat);
     blade.position.z = -(BLADE_START + len / 2);
     this.inner.add(blade);
+    this.blade = blade;
 
     const dark = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
     const guard = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.012, 16), new THREE.MeshStandardMaterial({ color: 0x8a6d2f, metalness: 0.7, roughness: 0.4 }));
@@ -56,6 +57,18 @@ export class SwordView {
     this.spotMark.position.z = LEFT_GRIP_SPOT_M;
     this.spotMark.visible = false;
     this.inner.add(this.spotMark);
+  }
+
+  private readonly blade: THREE.Mesh;
+  /** Distance from the grip to the tip (m); the weapon sets it. */
+  private bladeEnd = BLADE_END;
+
+  /** Weapon blade length (m, guard to tip). Moves the tip the sim and strikes use, too. */
+  setBladeLength(m: number): void {
+    const base = BLADE_END - BLADE_START;
+    this.blade.scale.z = m / base;
+    this.blade.position.z = -(BLADE_START + m / 2);
+    this.bladeEnd = BLADE_START + m;
   }
 
   private readonly longHandle: THREE.Mesh;
@@ -95,7 +108,7 @@ export class SwordView {
   bladeWorld(hilt: THREE.Vector3, tip: THREE.Vector3): void {
     this.root.updateMatrixWorld(true);
     hilt.set(0, 0, -BLADE_START);
-    tip.set(0, 0, -BLADE_END);
+    tip.set(0, 0, -this.bladeEnd);
     this.inner.localToWorld(hilt);
     this.inner.localToWorld(tip);
   }
@@ -192,6 +205,18 @@ const GUARD_GHOST: Record<string, SwordPose> = {
 const RING_START_M = 0.16;
 const RING_END_M = 0.05;
 const RING_LEAD_MS = 400;
+
+/** How the last strike went, so his body can answer it: follow through, press, or recoil. */
+export type EnemyReaction = 'parried' | 'blocked' | 'hit' | 'dodged';
+/** Extra pull-back (m) at the very end of the telegraph, just before the swing commits. */
+const COIL_M = 0.12;
+/** Enemy-clock time over which the coil builds, ending as the swing starts. */
+const COIL_MS = 220;
+/** Torso twist (rad): toward the wound-up side during the telegraph, past centre on the strike. */
+const TWIST_WINDUP = 0.38;
+const TWIST_STRIKE = 0.22;
+/** How long each reaction pose is held before he settles back to rest (ms). */
+const REACT_MS: Record<EnemyReaction, number> = { parried: 380, blocked: 160, hit: 260, dodged: 300 };
 
 /** Enemy blade length (m); interpolated poses are renormalised so the sword never stretches. */
 const ENEMY_BLADE_M = 0.85;
@@ -409,6 +434,8 @@ export class EnemyView {
 
   reset(): void {
     copyPose(this.pose, REST);
+    this.reaction = null;
+    this.twist = this.lean = 0;
     this.deadT = 0;
     this.body.rotation.set(0, 0, 0);
     this.root.visible = true;
@@ -416,6 +443,62 @@ export class EnemyView {
 
   hit(): void {
     this.hitFlash = 1;
+  }
+
+  private reaction: EnemyReaction | null = null;
+  private reactT = 0;
+  private reactAttack = NaN;
+  private twist = 0;
+  private lean = 0;
+
+  /** Tell the body how the strike just went (game calls this from the duel events). */
+  react(kind: EnemyReaction, duel: Duel): void {
+    this.reaction = kind;
+    this.reactT = 0;
+    this.reactAttack = duel.enemy.attackStart;
+  }
+
+  /** Coil: push a windup pose further back, away from where the swing will land. */
+  private coil(out: SwordPose, k: SwingKeys, amount: number): void {
+    copyPose(out, k.windup);
+    for (const end of ['hilt', 'tip'] as const) {
+      const w = k.windup[end];
+      const s = k.strike[end];
+      const dx = w.x - s.x;
+      const dy = w.y - s.y;
+      const dz = w.z - s.z;
+      const n = (COIL_M * amount) / Math.max(1e-6, Math.hypot(dx, dy, dz));
+      out[end].x += dx * n;
+      out[end].y += dy * n;
+      out[end].z += dz * n;
+    }
+  }
+
+  /** After the strike: where the blade goes, by how the strike went. Returns the lerp rate. */
+  private reactionPose(out: SwordPose, k: SwingKeys): number {
+    const r = this.reaction;
+    if (!r || this.reactT > REACT_MS[r]) {
+      copyPose(out, REST);
+      return 6;
+    }
+    if (r === 'parried') {
+      // Knocked back up toward his windup: the blade bounces off yours.
+      lerpPoseInto(out, k.strike, k.windup, 0.75);
+      return 16;
+    }
+    if (r === 'blocked') {
+      copyPose(out, k.strike); // leans on your guard for a moment
+      return 12;
+    }
+    // Hit or dodged: nothing stopped it, so it carries on along its arc and past you.
+    for (const end of ['hilt', 'tip'] as const) {
+      const s = k.strike[end];
+      const m = k.mid[end];
+      out[end].x = s.x + (s.x - m.x) * 0.45;
+      out[end].y = s.y + (s.y - m.y) * 0.45;
+      out[end].z = s.z + (s.z - m.z) * 0.2;
+    }
+    return 10;
   }
 
   private rigged: RiggedEnemy | null = null;
@@ -554,21 +637,41 @@ export class EnemyView {
       if (this.deadT > 2500) this.root.visible = false;
     } else if (e.state === 'stagger') {
       copyPose(this.target, STAGGER);
-      this.body.rotation.x = 0.25;
-    } else {
-      this.body.rotation.x = 0;
+      this.body.rotation.set(0.25, 0, 0);
+    }
+    let rate = e.state === 'attack' && !e.struck ? 9 : 6;
+    let twist = 0;
+    let lean = 0;
+    if (e.state !== 'dead' && e.state !== 'stagger') {
+      this.reactT += animMs;
       if (att) {
         const k = KEYS[kindOf(att)];
-        const swingFrac = Math.min(0.5, SWING_MS / duel.windup(att));
+        const w = duel.windup(att);
+        const swingFrac = Math.min(0.5, SWING_MS / w);
+        // Which side he winds up on (duel x); a vertical chop twists a little to his sword side.
+        const side = Math.sign(k.windup.tip.x) || 0.4;
         if (!e.struck && p >= 1 - swingFrac) {
           // Committed swing along the arc, timed so the blade arrives on the strike instant.
           const f = Math.min(1, (p - (1 - swingFrac)) / swingFrac);
-          swingPose(this.pose, k, swingEase(f));
+          const g = swingEase(f);
+          swingPose(this.pose, k, g);
           swing = true;
+          twist = side * (TWIST_WINDUP - (TWIST_WINDUP + TWIST_STRIKE) * g);
+          lean = 0.1 * g; // weight goes onto the front foot
         } else if (!e.struck) {
-          copyPose(this.target, k.windup);
+          // Telegraph: hold the windup, then coil a little further just before he commits.
+          const untilSwing = (1 - swingFrac - p) * w;
+          const coil = Math.max(0, Math.min(1, 1 - untilSwing / COIL_MS));
+          this.coil(this.target, k, coil * coil);
+          twist = side * TWIST_WINDUP * Math.min(1, p * 3);
+          lean = -0.05 * coil;
         } else {
-          copyPose(this.target, REST);
+          if (this.reactAttack !== e.attackStart) this.reaction = null;
+          rate = this.reactionPose(this.target, k);
+          const r = this.reaction;
+          const live = r && this.reactT <= REACT_MS[r];
+          twist = live && r !== 'parried' ? -side * TWIST_STRIKE : 0;
+          lean = live ? (r === 'parried' ? -0.22 : r === 'blocked' ? 0.08 : 0.14) : 0;
         }
       } else {
         copyPose(this.target, e.state === 'idle' ? IDLE_GUARD[e.guardSide] : REST);
@@ -576,8 +679,15 @@ export class EnemyView {
     }
     if (!swing) {
       fixLength(this.target, ENEMY_BLADE_M); // same length as the swing, so it never pops
-      const rate = e.state === 'attack' && !e.struck ? 9 : 6;
       lerpPoseInto(this.pose, this.pose, this.target, 1 - Math.exp((-rate * animMs) / 1000));
+    }
+    // Torso twist and lean ease in (fast, so they never lag the blade by much).
+    const ease = 1 - Math.exp((-14 * animMs) / 1000);
+    this.twist += (twist - this.twist) * ease;
+    this.lean += (lean - this.lean) * ease;
+    if (e.state !== 'dead' && e.state !== 'stagger') {
+      this.body.rotation.y = this.twist;
+      this.body.rotation.x = this.lean;
     }
 
     // Blade and arms.
@@ -586,7 +696,10 @@ export class EnemyView {
     placeSegment(this.blade, hilt, tip, this.v3);
     const shoulderY = -space.height + 1.45;
     for (let i = 0; i < 2; i++) {
-      const sh = DuelSpace.toLocal({ x: i === 0 ? -0.2 : 0.2, y: shoulderY, z: Dz - 0.02 }, this.v2);
+      // Shoulders turn with the torso (local rotation.y = twist maps to duel z = x0·sin(twist)).
+      const x0 = i === 0 ? -0.2 : 0.2;
+      const tw = this.body.rotation.y;
+      const sh = DuelSpace.toLocal({ x: x0 * Math.cos(tw), y: shoulderY, z: Dz - 0.02 + x0 * Math.sin(tw) }, this.v2);
       placeSegment(this.arms[i], sh, hilt, this.v3);
     }
 
@@ -643,7 +756,7 @@ export class EnemyView {
 const TRAIL_MS = 700;
 const TRAIL_MAX = 48;
 
-class SwingTrail {
+export class SwingTrail {
   readonly mesh: THREE.Mesh;
   private readonly samples: Array<{ a: THREE.Vector3; b: THREE.Vector3; t: number }> = [];
   private readonly pos = new Float32Array(TRAIL_MAX * 2 * 3);
@@ -820,5 +933,55 @@ export class Sparks {
     }
     this.points.geometry.attributes.position.needsUpdate = true;
     this.points.geometry.attributes.color.needsUpdate = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shockwave rings: an expanding, fading ring that faces the player (fixed pool).
+
+const WAVES = 6;
+
+export class Shockwaves {
+  readonly group = new THREE.Group();
+  private readonly rings: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; dur: number; size: number }> = [];
+  private next = 0;
+
+  constructor() {
+    const geo = new THREE.RingGeometry(0.86, 1, 48);
+    for (let i = 0; i < WAVES; i++) {
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.visible = false;
+      mesh.renderOrder = 14;
+      this.group.add(mesh);
+      this.rings.push({ mesh, mat, life: 0, dur: 1, size: 1 });
+    }
+  }
+
+  /** Ring at a world point, growing to `size` metres across over `durMs`. */
+  emit(at: THREE.Vector3, color: number, size: number, durMs = 320): void {
+    const r = this.rings[this.next];
+    this.next = (this.next + 1) % WAVES;
+    r.mesh.position.copy(at);
+    r.mat.color.setHex(color);
+    r.life = 1;
+    r.dur = durMs;
+    r.size = size / 2;
+    r.mesh.visible = true;
+  }
+
+  update(dtMs: number, head: THREE.Vector3): void {
+    for (const r of this.rings) {
+      if (r.life <= 0) continue;
+      r.life -= dtMs / r.dur;
+      if (r.life <= 0) {
+        r.mesh.visible = false;
+        continue;
+      }
+      const k = 1 - r.life;
+      r.mesh.scale.setScalar(r.size * (0.15 + 0.85 * (1 - (1 - k) * (1 - k)))); // fast out, slow settle
+      r.mat.opacity = r.life * r.life;
+      r.mesh.lookAt(head);
+    }
   }
 }

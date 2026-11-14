@@ -331,6 +331,8 @@ export class Duel {
   private onStrike(att: AttackDef, S: number): void {
     const p = this.player;
     if (S >= p.dodgeAt && S <= p.iframesUntil && dodgeBeats(p.dodgeKind, att)) {
+      // A clean dodge of a must-dodge attack leaves him overextended: same counter window as a perfect.
+      if (att.perilous !== 'none') p.counterUntil = S + this.cfg.counterWindowMs;
       this.emit({ type: 'dodged', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous, dodge: p.dodgeKind ?? undefined });
       return;
     }

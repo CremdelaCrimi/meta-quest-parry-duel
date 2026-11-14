@@ -2,17 +2,43 @@ import * as THREE from 'three';
 import type { Sfx } from './audio/sfx';
 import { DEFAULT_GUARD, PRESETS } from './core/config';
 import { makePose } from './core/guard';
+import { DEFAULT_LOADOUT, RELICS, WEAPONS, weaponById } from './core/loadout';
+import type { Loadout, Weapon } from './core/loadout';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel } from './core/sim';
 import type { AbilityId, AttackDef, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
-import { EnemyView, Sparks, SwordView, contactPoint } from './render/views';
+import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
 import { ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
 
-type Phase = 'calibrate' | 'fight' | 'won' | 'reward' | 'dead';
+type Phase = 'calibrate' | 'loadout' | 'fight' | 'won' | 'reward' | 'dead';
+/** What the cards are offering: a boon after a win, or the weapon / relic before a run. */
+type Menu = 'boon' | 'weapon' | 'relic';
+interface Offer {
+  id: string;
+  name: string;
+  desc: string;
+}
+const LOADOUT_KEY = 'parryDuel.loadout';
+
+function loadLoadout(): Loadout {
+  try {
+    const v = JSON.parse(localStorage.getItem(LOADOUT_KEY) ?? 'null') as Partial<Loadout> | null;
+    return { ...DEFAULT_LOADOUT, ...(v ?? {}) };
+  } catch {
+    return { ...DEFAULT_LOADOUT };
+  }
+}
+function saveLoadout(l: Loadout): void {
+  try {
+    localStorage.setItem(LOADOUT_KEY, JSON.stringify(l));
+  } catch {
+    /* private mode: the menu still works, it just won't remember */
+  }
+}
 
 interface Attempt {
   offset: number;
@@ -68,6 +94,10 @@ export class Game {
 
   readonly enemyView = new EnemyView();
   readonly sparks = new Sparks();
+  private readonly waves = new Shockwaves();
+  /** Ribbon behind your own blade on fast swings (gold while a counter is open). */
+  private readonly playerTrail = new SwingTrail();
+  private trailClock = 0;
   private readonly hud = new CanvasPanel(1024, 720, 0.75);
   private readonly banner = new CanvasPanel(1024, 256, 1.1);
   /** How to play: shown before the run and through the Trainer fight. */
@@ -89,10 +119,15 @@ export class Game {
   /** Edge-of-view vignette: hit flash, low HP pulse, high posture warning. */
   private readonly vignette = new Vignette();
   private hurtT = 0;
+  private dodgeT = 0;
   private readonly bladeA = new THREE.Vector3();
   private readonly bladeB = new THREE.Vector3();
-  private readonly cards = [0, 1, 2].map(() => new CanvasPanel(512, 640, 0.3));
-  private offers: Pickup[] = [];
+  private readonly cards = [0, 1, 2, 3, 4, 5].map(() => new CanvasPanel(512, 640, 0.3));
+  private offers: Offer[] = [];
+  private menu: Menu = 'boon';
+  /** Weapon and starting relic, remembered between visits (localStorage). */
+  readonly loadout: Loadout = loadLoadout();
+  weapon: Weapon = weaponById(this.loadout.weapon);
   private hover = -1;
   private hudOn = true;
 
@@ -129,7 +164,7 @@ export class Game {
     this.space.group.rotation.y = Math.PI;
     this.space.group.updateMatrixWorld(true);
 
-    scene.add(this.space.group, this.sparks.points, this.vignette.mesh, this.status.mesh);
+    scene.add(this.space.group, this.sparks.points, this.waves.group, this.playerTrail.mesh, this.vignette.mesh, this.status.mesh);
     this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh, this.help.mesh, this.enemyPanel.mesh, this.callout.mesh);
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this; // console tuning
     // The simple built-in swordsman is the default; ?enemy=rigged loads the Tripo/Mixamo model from public/enemy/.
@@ -146,7 +181,6 @@ export class Game {
     this.status.mesh.renderOrder = 12;
     this.callout.mesh.visible = false;
     this.drawHelp();
-    this.cards.forEach((c, i) => place(c.mesh, { x: (i - 1) * 0.36, y: -0.35, z: 0.75 }));
 
     // ?preset=1 (Lies of P-like), ?preset=2 (Easy). Startup only, so P still cycles through all.
     const preset = Number(new URLSearchParams(location.search).get('preset'));
@@ -206,7 +240,8 @@ export class Game {
         if (this.phase === 'won' && t - this.phaseT > 1800) this.showReward(t);
         break;
       case 'reward':
-        this.updateReward(t);
+      case 'loadout':
+        this.updateCards(t);
         break;
       case 'dead':
         this.stepDuel(t, dt);
@@ -217,6 +252,8 @@ export class Game {
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
     this.sword.update(dt);
     this.sparks.update(dt);
+    this.waves.update(dt, f.headPos);
+    this.updatePlayerTrail(f, dt);
     this.updateCallout();
     this.updateVignette(t, dt);
     this.followView(this.status.mesh, f.headPos, f.headQuat, dt);
@@ -275,7 +312,7 @@ export class Game {
       strikeSpeed = 3; // desktop: click = strike, on the side the mouse holds the sword
       strikeZone = zoneOf(this.swordCurr.tip.x);
     }
-    if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS[f.twoHanded ? 'two' : 'one'];
+    if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS[f.twoHanded ? 'two' : 'one'] * this.weapon.strikeCooldownMult;
 
     let ability: AbilityId | null = null;
     if (f.leftTrigger) ability = 'slowTime';
@@ -313,7 +350,9 @@ export class Game {
         this.sfx.play('perfect');
         this.input.pulse('right', 1, 80); // matches the hit-stop so freeze and rumble end together
         this.sparks.burst(contact, 0xffd060, 40, 2.5);
+        this.waves.emit(contact, 0xffd060, 0.35 + 0.08 * Math.min(4, n));
         this.sword.flash(0xffc040);
+        this.enemyView.react('parried', this.duel);
         this.record(ev.offsetMs!, 'perfect', []);
         this.flashResult(n > 1 ? `PERFECT ×${n} CHAIN` : 'PERFECT', COLORS.perfect, t);
         break;
@@ -324,12 +363,14 @@ export class Game {
         this.input.pulse('right', 0.5, 120);
         this.sparks.burst(contact, hexOf(col), 12, 1.4);
         this.sword.flash(hexOf(col));
+        this.enemyView.react('blocked', this.duel);
         this.record(ev.offsetMs!, 'block', ev.faults ?? []);
         this.flashResult(`BLOCK · ${faultText(ev.faults)}`, COLORS[col], t);
         break;
       }
       case 'hit': {
         this.sfx.play('hit');
+        this.enemyView.react('hit', this.duel);
         this.hurtT = 1;
         this.statusAt = 0;
         this.input.pulse('right', 1, 250);
@@ -348,7 +389,9 @@ export class Game {
       }
       case 'dodged':
         this.sfx.play('dodge');
-        this.flashResult('DODGED', COLORS.perfect, t);
+        this.enemyView.react('dodged', this.duel);
+        this.dodgeT = 1;
+        this.flashResult(ev.perilous && ev.perilous !== 'none' ? 'DODGED · COUNTER NOW!' : 'DODGED', COLORS.perfect, t);
         break;
       case 'dodge':
         this.sfx.play('dodge', 0.35);
@@ -368,7 +411,8 @@ export class Game {
         this.sfx.play('strike');
         this.enemyView.hit();
         this.input.pulse('right', 0.6, 30);
-        this.sparks.burst(contact, 0xff6040, 8, 1.2);
+        this.sparks.burst(this.enemyView.hitPoint, 0xff6040, 14, 1.5);
+        this.waves.emit(this.enemyView.hitPoint, ev.opening ? 0x60ff9a : 0xff6040, 0.25, 220);
         break;
       case 'enemyBlock':
         // Show why the swing did nothing, and where to go instead.
@@ -383,12 +427,15 @@ export class Game {
         break;
       case 'enemyPostureBreak':
         this.sfx.play('peril');
+        this.waves.emit(contact, 0xffffff, 0.9, 520);
+        this.waves.emit(contact, 0xffd060, 0.6, 380);
         this.flashResult('POSTURE BROKEN: STRIKE!', COLORS.perfect, t);
         break;
       case 'finisher':
         this.sfx.play('finisher');
         this.input.pulse('right', 1, 220);
-        this.sparks.burst(contact, 0xff2020, 40, 3);
+        this.sparks.burst(this.enemyView.hitPoint, 0xff2020, 48, 3);
+        this.waves.emit(this.enemyView.hitPoint, 0xff3030, 1.1, 600);
         break;
       case 'enemyDead':
         this.setPhase('won', t);
@@ -404,6 +451,7 @@ export class Game {
         break;
       case 'wardAbsorb':
         this.sfx.play('block');
+        this.waves.emit(f.headPos.clone().add(this.tmp2.set(0, -0.15, 0)), 0x6fb6ff, 0.7, 450);
         this.flashResult('WARD ABSORBED', COLORS.block, t);
         break;
     }
@@ -411,10 +459,40 @@ export class Game {
 
   // ---------------------------------------------------------------- run flow
 
+  /** Before each run: pick a weapon, then a free starting relic (?loadout=0 skips straight in with the last pick). */
   private startRun(t: number): void {
+    if (new URLSearchParams(location.search).get('loadout') === '0') {
+      this.beginRun(t);
+      return;
+    }
+    this.openMenu('weapon', t);
+  }
+
+  private beginRun(t: number): void {
+    this.weapon = weaponById(this.loadout.weapon);
+    this.sword.setBladeLength(this.weapon.bladeM);
     this.run = new Run((Date.now() ^ Math.floor(t)) >>> 0);
+    this.run.equip(this.weapon, RELICS.find((r) => r.id === this.loadout.relic) ?? null);
     this.newDuel(t);
     this.setPhase('fight', t);
+  }
+
+  private openMenu(menu: Menu, t: number): void {
+    this.menu = menu;
+    const pick = this.isXR ? 'Touch a card with your blade, pull trigger' : `Press 1–${menu === 'boon' ? 3 : menu === 'weapon' ? WEAPONS.length : RELICS.length}`;
+    if (menu === 'weapon') {
+      this.offers = WEAPONS;
+      this.showBanner('CHOOSE YOUR WEAPON', COLORS.info, pick);
+    } else if (menu === 'relic') {
+      this.offers = RELICS;
+      this.showBanner('CHOOSE A RELIC', COLORS.block, `Free for this run · ${pick}`);
+    } else {
+      this.offers = this.run.offer(3);
+      this.showBanner('CHOOSE A BOON', COLORS.perfect, pick);
+    }
+    this.hover = -1;
+    this.setPhase(menu === 'boon' ? 'reward' : 'loadout', t);
+    this.drawCards();
   }
 
   private newDuel(t: number): void {
@@ -432,14 +510,10 @@ export class Game {
   }
 
   private showReward(t: number): void {
-    this.offers = this.run.offer(3);
-    this.hover = -1;
-    this.setPhase('reward', t);
-    this.showBanner('CHOOSE A BOON', COLORS.perfect, this.isXR ? 'Touch a card with your blade, pull trigger' : 'Press 1, 2 or 3');
-    this.drawCards();
+    this.openMenu('boon', t);
   }
 
-  private updateReward(t: number): void {
+  private updateCards(t: number): void {
     const f = this.input.frame;
     // Hover: nearest card to the blade tip.
     this.space.toDuel(f.tip, this.tmpV3);
@@ -459,11 +533,20 @@ export class Game {
       this.drawCards();
     }
     const pick = f.choose >= 0 ? f.choose : f.rightTrigger ? this.hover : -1;
-    if (pick >= 0 && pick < this.offers.length) {
-      this.sfx.play('ui');
-      this.run.choose(this.offers[pick]);
+    if (pick < 0 || pick >= this.offers.length) return;
+    this.sfx.play('ui');
+    const id = this.offers[pick].id;
+    for (const c of this.cards) c.mesh.visible = false;
+    if (this.menu === 'weapon') {
+      this.loadout.weapon = id;
+      this.openMenu('relic', t);
+    } else if (this.menu === 'relic') {
+      this.loadout.relic = id;
+      saveLoadout(this.loadout);
+      this.beginRun(t);
+    } else {
+      this.run.choose(this.offers[pick] as Pickup);
       this.run.advance(this.duel.player.hp);
-      for (const c of this.cards) c.mesh.visible = false;
       this.newDuel(t);
       this.setPhase('fight', t);
     }
@@ -473,7 +556,7 @@ export class Game {
     this.phase = p;
     this.phaseT = t;
     if (p === 'fight') this.banner.mesh.visible = false;
-    if (p !== 'reward') for (const c of this.cards) c.mesh.visible = false;
+    if (p !== 'reward' && p !== 'loadout') for (const c of this.cards) c.mesh.visible = false;
     if (p === 'calibrate') {
       this.showBanner(
         'PARRY DUEL',
@@ -620,7 +703,7 @@ export class Game {
       ctx.font = '500 25px system-ui, sans-serif';
       ctx.fillStyle = '#cfd4dc';
       const owned = Object.entries(this.run.stacks).map(([id, n]) => (n > 1 ? `${id}×${n}` : id));
-      ctx.fillText(`Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 585);
+      ctx.fillText(`${this.weapon.name} · Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 585);
       const ab = d.mods.abilities.map((a) => {
         const left = Math.max(0, d.player.abilityReadyAt[a] - t) / 1000;
         return `${a === 'slowTime' ? 'L-trigger Time' : 'X Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
@@ -752,7 +835,8 @@ export class Game {
     const e = d.enemy;
     const t = this.lastT;
     const teach = this.calloutsAlways || this.run.fight === 0;
-    const swing = this.phase === 'fight' && teach && !!att && e.state === 'attack' && !e.struck;
+    // Must-dodge attacks are always named: they arrive after the Trainer and can't be blocked.
+    const swing = this.phase === 'fight' && !!att && (teach || att.perilous !== 'none') && e.state === 'attack' && !e.struck;
     const result = !swing && this.showResults && t - this.lastResult.t < 1100;
     const k = swing ? `${att!.id}@${e.attackStart}` : result ? `r${this.lastResult.t}` : '';
     this.callout.mesh.visible = swing || result;
@@ -787,12 +871,30 @@ export class Game {
     const fighting = this.phase === 'fight';
     let color = 0xff2020;
     let a = 0.7 * this.hurtT; // peaks at 0.7, fades out linearly over 400 ms
+    this.dodgeT = Math.max(0, this.dodgeT - dt / 350);
+    if (this.dodgeT > 0 && this.hurtT === 0) {
+      color = 0x60c0ff; // a clean dodge: brief cool flash at the edges
+      a = 0.45 * this.dodgeT;
+    }
     if (fighting && p.hp / p.hpMax < 0.25) a = Math.max(a, 0.25 + 0.2 * Math.sin(t / 220));
     else if (fighting && p.posture / this.timing.playerPostureMax > 0.75 && a < 0.3) {
       color = 0xff8a1a;
       a = 0.35;
     }
     this.vignette.set(f.headPos, f.headQuat, color, a);
+  }
+
+  /** In VR your blade leaves a ribbon on fast swings, so strikes read as strikes. Gold while a counter is open. */
+  private updatePlayerTrail(f: InputDevice['frame'], dt: number): void {
+    this.trailClock += dt;
+    const speed = this.prevTip.distanceTo(f.tip) / Math.max(1e-3, dt / 1000);
+    // VR only: a desktop mouse teleports between guards, which would draw ribbons that aren't swings.
+    if (this.isXR && f.hasSword && speed > STRIKE_MIN_SPEED && (this.phase === 'fight' || this.phase === 'won')) {
+      const counter = this.duel.time <= this.duel.player.counterUntil || this.duel.enemy.state === 'stagger';
+      this.tmp2.copy(f.hilt).lerp(f.tip, 0.45);
+      this.playerTrail.push(this.tmp2, f.tip, this.trailClock, counter ? 0xffd060 : 0xcfe6ff);
+    }
+    this.playerTrail.update(this.trailClock);
   }
 
   /** Keep a panel low in the view, catching up with head turns lazily so it never jitters. */
@@ -823,10 +925,17 @@ export class Game {
   }
 
   private drawCards(): void {
+    const n = this.offers.length;
+    const last = this.menu === 'weapon' ? this.loadout.weapon : this.menu === 'relic' ? this.loadout.relic : null;
     this.cards.forEach((c, i) => {
       const p = this.offers[i];
       c.mesh.visible = !!p;
       if (!p) return;
+      // One row of three; six go in two rows, the lower one at about waist height.
+      const row = n > 3 ? Math.floor(i / 3) : 0;
+      const col = n > 3 ? i % 3 : i;
+      const cols = n > 3 ? 3 : n;
+      place(c.mesh, { x: (col - (cols - 1) / 2) * 0.36, y: n > 3 ? -0.15 - row * 0.42 : -0.35, z: 0.75 });
       const hov = i === this.hover;
       c.draw((ctx, w, h) => {
         ctx.fillStyle = hov ? 'rgba(60,48,16,0.92)' : 'rgba(16,18,26,0.88)';
@@ -844,6 +953,11 @@ export class Game {
         ctx.fillStyle = '#e0e4ea';
         ctx.font = '500 36px system-ui, sans-serif';
         wrap(ctx, p.desc, 36, 300, w - 72, 46);
+        if (p.id === last) {
+          ctx.fillStyle = '#7c8594';
+          ctx.font = '600 30px system-ui, sans-serif';
+          ctx.fillText('last time', w - 180, 72);
+        }
       });
     });
   }

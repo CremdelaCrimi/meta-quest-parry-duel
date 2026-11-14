@@ -49,6 +49,12 @@ export class Run {
     this.choose(PICKUPS.find((p) => p.id === 'ward')!);
   }
 
+  /** Start-of-run loadout: the weapon's trade-offs, then an optional free relic (a normal boon stack). */
+  equip(weapon: { apply(m: Modifiers): void }, relic?: Pickup | null): void {
+    weapon.apply(this.mods);
+    if (relic && (this.stacks[relic.id] ?? 0) < relic.maxStacks) this.choose(relic);
+  }
+
   /** First pass goes through every enemy (Trainer first); later loops skip the Trainer and get faster and tougher. */
   enemyForFight(): EnemyDef {
     if (this.fight < ENEMIES.length) return ENEMIES[this.fight];
