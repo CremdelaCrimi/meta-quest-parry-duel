@@ -51,7 +51,8 @@ const hexOf = (k: keyof typeof COLORS) => parseInt(COLORS[k].slice(1), 16);
 
 /** Minimum blade-tip speed (m/s) for contact with the enemy to count as a strike. */
 const STRIKE_MIN_SPEED = 1.8;
-const STRIKE_COOLDOWN_MS = 350;
+/** Wait before the next strike counts: one hand is quick, two hands hit harder but recover slower. */
+const STRIKE_COOLDOWN_MS = { one: 250, two: 450 };
 /** Strikes within this distance (m) of his centre line hit his sword, not a side. */
 const ZONE_CENTER_M = 0.06;
 /** cos of the max angle between tip motion and blade line for a strike to count as a poke. */
@@ -270,15 +271,15 @@ export class Game {
         strikePoke = move.length() > 1e-4 && move.normalize().dot(along) > POKE_ALIGN;
       }
     }
-    if (!this.isXR && f.rightTrigger && this.phase === 'fight') {
+    if (!this.isXR && f.rightTrigger && this.phase === 'fight' && t >= this.strikeReadyAt) {
       strikeSpeed = 3; // desktop: click = strike, on the side the mouse holds the sword
       strikeZone = zoneOf(this.swordCurr.tip.x);
     }
-    if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS;
+    if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS[f.twoHanded ? 'two' : 'one'];
 
     let ability: AbilityId | null = null;
     if (f.leftTrigger) ability = 'slowTime';
-    else if (f.leftGrip) ability = 'ward';
+    else if (f.btnX) ability = 'ward'; // left grip is for holding the sword with both hands
 
     this.duel.step({
       t0: this.duel.time,
@@ -290,6 +291,7 @@ export class Game {
       strikeSpeed,
       strikeZone,
       strikePoke,
+      twoHanded: f.twoHanded,
       ability,
     });
     for (const ev of this.duel.events) this.onEvent(ev, t);
@@ -621,7 +623,7 @@ export class Game {
       ctx.fillText(`Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 585);
       const ab = d.mods.abilities.map((a) => {
         const left = Math.max(0, d.player.abilityReadyAt[a] - t) / 1000;
-        return `${a === 'slowTime' ? 'L-trigger Time' : 'L-grip Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
+        return `${a === 'slowTime' ? 'L-trigger Time' : 'X Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
       });
       if (ab.length) ctx.fillText(ab.join('   '), 32, 625);
       ctx.fillStyle = '#7c8594';
@@ -663,9 +665,10 @@ export class Game {
       line('Red = HP. Orange = posture (fills as you block; full =', '500 29px system-ui, sans-serif', '#d8dce4', 38);
       line('guard broken). Perfects in a row CHAIN for more damage.', '500 29px system-ui, sans-serif', '#d8dce4', 66);
 
-      line('DODGE: not needed yet (lean or duck, later)', '600 30px system-ui, sans-serif', '#9aa3b0', 60);
+      line(xr ? 'LEFT HAND: squeeze grip on the handle = two hands' : 'G: two-handed grip', '700 32px system-ui, sans-serif', '#ffd060', 38);
+      line('Steadier blocks, harder hits, slower. One hand: quick + pokes.', '500 27px system-ui, sans-serif', '#d8dce4', 50);
       line(
-        xr ? 'Buttons: R trigger start · A stats · B re-center · Y difficulty' : 'Keys: H stats · R re-center · P difficulty · A/D lean · S duck',
+        xr ? 'Buttons: R trigger start · X ward · A stats · B re-center · Y difficulty' : 'Keys: G two hands · E ward · H stats · R re-center · P difficulty',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,
@@ -689,6 +692,12 @@ export class Game {
       ctx.font = '700 32px system-ui, sans-serif';
       const hpText = `${Math.max(0, Math.ceil(p.hp))}`;
       ctx.fillText(hpText, w - 26 - ctx.measureText(hpText).width, 50);
+      if (this.input.frame.twoHanded) {
+        // Grip badge, right of YOU, so you always know which mode you're in.
+        ctx.font = '800 26px system-ui, sans-serif';
+        ctx.fillStyle = '#ffd060';
+        ctx.fillText('2H', w - 26 - 110, 48);
+      }
       if (d.assistOn) {
         ctx.font = '700 24px system-ui, sans-serif';
         ctx.fillStyle = COLORS.block;

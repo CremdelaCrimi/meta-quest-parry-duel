@@ -6,7 +6,7 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  A/D lean, S duck, Q/E abilities, 1–3 pick boon, P preset, R recalibrate.
+  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–3 pick boon, P preset, R recalibrate.
 
 ## Controls (Quest)
 There is no block or attack button: the sword does both. A how-to-play panel sits on your right
@@ -17,7 +17,9 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
 | Swing into enemy | **Strike**. While he waits he guards one side: hit the side his sword isn't on (green ring). Lands anywhere while he swings; counter after a perfect parry; finisher when posture breaks |
 | Lean / duck | Dodge. Not needed yet: the current enemies only use blockable swings |
-| Left trigger / grip | Time Sigil / Ward (once picked up) |
+| Left grip, hand on the handle | **Two-handed grip** (see below) |
+| X | Ward: absorb the next hit (every run starts with it) |
+| Left trigger | Time Sigil (once picked up) |
 | Right trigger | Start / confirm |
 | A / B / Y | Hide panels / re-center / switch timing preset |
 
@@ -54,6 +56,21 @@ it, so the next one has to go to the other side. He also shifts guard by himself
 (`?guardShiftMinMs=&guardShiftMaxMs=`). A poke (tip driven along the blade's line) into his guard deals
 2× posture (`?pokePostureMult=`). While he's swinging, after a perfect parry (gold ring on his chest)
 and when he's broken, every strike lands.
+
+**Two-handed grip:** put your left hand on the handle, about 17 cm behind your right
+(a ring appears as you get close), and squeeze the left grip. After 150 ms both controllers click
+and a 2H badge shows on your strip. Let go of the grip, or pull your hands more than 10 cm
+apart, to drop back to one hand. While held, the blade turns about your right hand 70% of
+the way toward the line between your hands, so the left hand steadies it (`src/xr/input.ts`).
+
+| | One hand | Two hands |
+|---|---|---|
+| Steadiness limit for a perfect | 1.2 m/s | 1.6 m/s (`twoHandSteadyMaxSpeed`) |
+| Blade angle tolerance | 30° | 35° (`twoHandAngleBonusDeg`) |
+| Posture cost of a block | ×1 | ×0.75 (`twoHandBlockPostureMult`) |
+| Strike damage | ×1 | ×1.25 (`twoHandDamageMult`) |
+| Next strike counts after | 250 ms | 450 ms (`STRIKE_COOLDOWN_MS`) |
+| Poke posture into his guard | ×2 | ×1.25 (`twoHandPokeMult`) |
 
 **Reading the fight:** a thin ghost sword shows the guard; an impact ring closes on it and turns gold
 as the perfect window opens. The enemy's HP, posture, chain and frenzy badges float above his head;

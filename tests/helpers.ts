@@ -83,6 +83,7 @@ export function drive(
     /** Zone and poke applied to every strike in strikeAt (default centre slash). */
     zone?: StrikeZone;
     poke?: boolean;
+    twoHanded?: boolean;
     abilityAt?: Array<[number, 'slowTime' | 'ward']>;
   } = {},
 ): DuelEvent[] {
@@ -116,6 +117,7 @@ export function drive(
       strikeSpeed,
       strikeZone: extra.zone,
       strikePoke: extra.poke,
+      twoHanded: extra.twoHanded,
       ability,
     });
     for (const e of duel.events) events.push({ ...e });

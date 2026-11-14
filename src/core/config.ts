@@ -48,6 +48,11 @@ const BASE: Omit<TimingConfig, 'name'> = {
   pokePostureMult: 2,
   guardShiftMinMs: 1400,
   guardShiftMaxMs: 2600,
+  twoHandSteadyMaxSpeed: 1.6,
+  twoHandAngleBonusDeg: 5,
+  twoHandBlockPostureMult: 0.75, // 0.6 -> 0.45 on the Sekiro-like preset
+  twoHandDamageMult: 1.25,
+  twoHandPokeMult: 1.25,
   finisherDamage: 1000,
 };
 

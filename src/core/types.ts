@@ -139,6 +139,17 @@ export interface TimingConfig {
   /** While idle the enemy guards one side and moves his guard every guardShiftMin..MaxMs. */
   guardShiftMinMs: number;
   guardShiftMaxMs: number;
+  /**
+   * Two-handed grip (left hand on the handle): steadier guards and heavier hits, slower to
+   * strike again (the strike cooldown lives in the input layer). One-handed keeps the 2x pokes.
+   */
+  twoHandSteadyMaxSpeed: number;
+  twoHandAngleBonusDeg: number;
+  /** Multiplies blockPlayerPostureMult while two-handed (braced guard). */
+  twoHandBlockPostureMult: number;
+  twoHandDamageMult: number;
+  /** Poke posture multiplier while two-handed (replaces pokePostureMult). */
+  twoHandPokeMult: number;
   finisherDamage: number;
 }
 
@@ -169,6 +180,8 @@ export interface FrameInput {
   /** Where the strike met his body (default 'center'), and whether it was a poke. */
   strikeZone?: StrikeZone;
   strikePoke?: boolean;
+  /** Left hand is on the handle this frame. */
+  twoHanded?: boolean;
   /** Ability activated this frame (edge-triggered), or null. */
   ability: AbilityId | null;
 }

@@ -4,7 +4,7 @@ import { DodgeDetector } from '../src/core/dodge';
 import { ATTACKS, ENEMIES } from '../src/core/enemies';
 import { classifyGuard } from '../src/core/guard';
 import type { GuardReading } from '../src/core/guard';
-import { PICKUPS, Run } from '../src/core/roguelite';
+import { Run } from '../src/core/roguelite';
 import { POSES, TEST_ENEMY, drive, guardAt, makeDuel, outcome, schedule, script } from './helpers';
 
 const L = ATTACKS.slashLeft; // windup 600 ms
@@ -354,8 +354,7 @@ describe('roguelite run', () => {
     const offer = run.offer();
     expect(offer).toHaveLength(3);
     expect(new Set(offer.map((p) => p.id)).size).toBe(3);
-    const ward = PICKUPS.find((p) => p.id === 'ward')!;
-    run.choose(ward);
+    // Every run starts with the Ward, so it is never offered.
     expect(run.mods.abilities).toContain('ward');
     for (let i = 0; i < 20; i++) expect(run.offer().some((p) => p.id === 'ward')).toBe(false);
   });
@@ -500,5 +499,41 @@ describe('idle guard and openings', () => {
     script(d, L, d.enemy.clock + 10);
     drive(d, () => POSES.neutral, d.time + 100);
     expect(d.opening).toBe('all');
+  });
+});
+
+describe('two-handed grip', () => {
+  const c = PRESET_SEKIRO_LIKE;
+  const open = (d: ReturnType<typeof makeDuel>) => (d.enemy.guardSide === 'left' ? 'right' : 'left');
+
+  it('hits harder', () => {
+    const d = makeDuel();
+    drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [d.time + 50], zone: open(d), twoHanded: true });
+    expect(d.enemy.hp).toBeCloseTo(TEST_ENEMY.hp - c.playerDamage * c.twoHandDamageMult, 5);
+  });
+
+  it('pokes for less posture than one-handed', () => {
+    const d = makeDuel();
+    drive(d, () => POSES.neutral, d.time + 100, 90, { strikeAt: [d.time + 50], zone: 'center', poke: true, twoHanded: true });
+    expect(d.enemy.posture).toBeCloseTo(c.playerPostureDamageOnBlocked * c.twoHandPokeMult, 5);
+  });
+
+  it('a braced block costs less posture', () => {
+    const cost = (twoHanded: boolean) => {
+      const d = makeDuel();
+      script(d, L, START);
+      drive(d, guardAt(POSES.left, S - 400), S + 100, 90, { twoHanded }); // far too early: a block
+      return d.player.posture;
+    };
+    const one = cost(false);
+    expect(one).toBeGreaterThan(0);
+    expect(cost(true)).toBeCloseTo(one * c.twoHandBlockPostureMult, 1);
+  });
+
+  it('tolerates a less steady blade', () => {
+    const d = makeDuel();
+    expect(d.steadyLimit).toBe(c.steadyMaxSpeed);
+    drive(d, () => POSES.neutral, d.time + 20, 90, { twoHanded: true });
+    expect(d.steadyLimit).toBe(c.twoHandSteadyMaxSpeed);
   });
 });

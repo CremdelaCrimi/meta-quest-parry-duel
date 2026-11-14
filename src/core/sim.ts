@@ -109,6 +109,8 @@ export class Duel {
   private readonly rng: Rng;
   /** Separate stream for guard shifts, so they never change which combos the enemy picks. */
   private readonly guardRng: Rng;
+  /** Grip this frame. Guards are judged with the grip held at that instant. */
+  twoHanded = false;
   private readonly ai: boolean;
   private readonly dodge = new DodgeDetector();
 
@@ -151,6 +153,11 @@ export class Duel {
     if (e.state === 'dead') return null;
     if (e.state !== 'idle' || this.time <= this.player.counterUntil) return 'all';
     return e.guardSide === 'left' ? 'right' : 'left';
+  }
+
+  /** Tip speed (m/s) above which the blade counts as moving, for the steadiness check. */
+  get steadyLimit(): number {
+    return this.twoHanded ? this.cfg.twoHandSteadyMaxSpeed : this.cfg.steadyMaxSpeed;
   }
 
   private guardShiftDelay(): number {
@@ -211,6 +218,7 @@ export class Duel {
 
   step(inp: FrameInput): void {
     this.events.length = 0;
+    this.twoHanded = !!inp.twoHanded; // per frame: a grip change is slower than a frame anyway
     if (this.player.dead || this.enemy.state === 'dead') {
       this.time = inp.t1;
       return;
@@ -235,7 +243,7 @@ export class Duel {
       lerpPose(this.poseA, inp.swordPrev, inp.swordCurr, fa);
       lerpPose(this.poseB, inp.swordPrev, inp.swordCurr, fb);
       const tipSpeed = dist(this.poseA.tip, this.poseB.tip) / Math.max(1e-6, (b - a) / 1000);
-      if (tipSpeed > this.cfg.steadyMaxSpeed) this.lastFastT = b;
+      if (tipSpeed > this.steadyLimit) this.lastFastT = b;
       classifyGuard(this.poseB, this.guardCfg, this.readB);
       let transT = NaN;
       if (this.readB.dir !== this.guard.dir) {
@@ -354,13 +362,13 @@ export class Duel {
     const faults: Fault[] = [];
     if (offset < -early) faults.push('early');
     if (offset > c.perfectLateMs) faults.push('late');
-    if (angleErr > c.perfectAngleDeg) faults.push('angle');
+    if (angleErr > c.perfectAngleDeg + (this.twoHanded ? c.twoHandAngleBonusDeg : 0)) faults.push('angle');
     if (!this.steadyAt(t)) faults.push('shaky');
     if (entryT < this.player.lockoutUntil) faults.push('locked');
 
     if (faults.length === 0) {
       this.onPerfect(att, t, offset);
-    } else if (offset <= c.blockLateMs && angleErr <= c.blockAngleDeg) {
+    } else if (offset <= c.blockLateMs && angleErr <= c.blockAngleDeg + (this.twoHanded ? c.twoHandAngleBonusDeg : 0)) {
       this.onBlock(att, t, offset, faults);
     } else {
       this.takeHit(att, t, offset, faults);
@@ -397,7 +405,7 @@ export class Duel {
     const dmg = att.damage * c.blockHpMult;
     p.chain = 0;
     p.hp -= dmg;
-    p.posture += att.postureDamage * c.blockPlayerPostureMult;
+    p.posture += att.postureDamage * c.blockPlayerPostureMult * (this.twoHanded ? c.twoHandBlockPostureMult : 1);
     p.postureHitAt = t;
     e.posture += att.postureDamage * c.blockEnemyPostureMult;
     e.postureHitAt = t;
@@ -490,7 +498,7 @@ export class Duel {
     const e = this.enemy;
     const c = this.cfg;
     const p = this.player;
-    const dmg = c.playerDamage * this.mods.playerDamageMult;
+    const dmg = c.playerDamage * this.mods.playerDamageMult * (this.twoHanded ? c.twoHandDamageMult : 1);
 
     if (e.state === 'stagger') {
       e.hp -= c.finisherDamage;
@@ -516,7 +524,7 @@ export class Duel {
       this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
     } else {
       // Deflected. A poke into the guard still leans on his posture.
-      e.posture += c.playerPostureDamageOnBlocked * (poke ? c.pokePostureMult : 1);
+      e.posture += c.playerPostureDamageOnBlocked * (poke ? (this.twoHanded ? c.twoHandPokeMult : c.pokePostureMult) : 1);
       e.postureHitAt = t;
       this.emit({ type: 'enemyBlock', t, zone, poke });
     }

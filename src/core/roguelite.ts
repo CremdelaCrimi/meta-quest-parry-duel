@@ -29,8 +29,8 @@ export const PICKUPS: Pickup[] = [
   {
     id: 'ward',
     name: 'Ward Sigil',
-    desc: 'Left grip: absorb the next hit (12 s cooldown)',
-    maxStacks: 1,
+    desc: 'X button: absorb the next hit (12 s cooldown)',
+    maxStacks: 1, // every run starts with it (Run constructor), so it is never offered
     apply: (m) => void m.abilities.push('ward'),
   },
 ];
@@ -45,6 +45,8 @@ export class Run {
 
   constructor(readonly seed: number) {
     this.rng = new Rng(seed);
+    // The left hand has a job from the first fight: the Ward on X.
+    this.choose(PICKUPS.find((p) => p.id === 'ward')!);
   }
 
   /** First pass goes through every enemy (Trainer first); later loops skip the Trainer and get faster and tougher. */

@@ -15,6 +15,9 @@ export const BLADE_START = 0.12;
 export const BLADE_END = 1.0;
 /** Tilt of the blade relative to the controller grip (degrees). Tune if the sword feels angled wrong. */
 export const SWORD_TILT_DEG = -20;
+/** Where the left hand goes for a two-handed grip: this far behind the right hand along the handle (m).
+ *  Controllers can't overlap, so it's further back than a real hand would sit. */
+export const LEFT_GRIP_SPOT_M = 0.17;
 
 export class SwordView {
   /** Positioned at the grip (XR) or at the hilt (desktop). Blade runs along local -z. */
@@ -42,6 +45,50 @@ export class SwordView {
     handle.rotation.x = Math.PI / 2;
     handle.position.z = -BLADE_START + 0.11;
     this.inner.add(handle);
+
+    // Two-handed: the handle grows back to the left hand, and a ring marks where that hand goes.
+    this.longHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.019, 0.16, 10), dark);
+    this.longHandle.rotation.x = Math.PI / 2;
+    this.longHandle.position.z = -BLADE_START + 0.22 + 0.08;
+    this.longHandle.visible = false;
+    this.inner.add(this.longHandle);
+    this.spotMark = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.006, 8, 28), this.spotMat);
+    this.spotMark.position.z = LEFT_GRIP_SPOT_M;
+    this.spotMark.visible = false;
+    this.inner.add(this.spotMark);
+  }
+
+  private readonly longHandle: THREE.Mesh;
+  private readonly spotMat = new THREE.MeshBasicMaterial({ color: 0xffd060, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+  private readonly spotMark: THREE.Mesh;
+  private readonly qTmp = new THREE.Quaternion();
+
+  /** World point on the sword's axis, `z` metres behind the right hand (+) or toward the tip (-). */
+  axisPoint(z: number, out: THREE.Vector3): THREE.Vector3 {
+    this.root.updateMatrixWorld(true);
+    return this.inner.localToWorld(out.set(0, 0, z));
+  }
+
+  /**
+   * XR two-handed aim: rotate the sword about the right hand by a world-space rotation
+   * (null = straight out of the right controller).
+   */
+  setAim(world: THREE.Quaternion | null): void {
+    if (!world || !this.root.parent) {
+      this.root.quaternion.identity();
+      return;
+    }
+    // Local = parent⁻¹ · world · parent, so the rotation is applied in world space.
+    this.root.parent.getWorldQuaternion(this.qTmp);
+    this.root.quaternion.copy(this.qTmp).invert().multiply(world).multiply(this.qTmp);
+  }
+
+  /** Grip visuals: `near` 0..1 fades in the target ring as the left hand approaches. */
+  setGrip(twoHanded: boolean, near: number): void {
+    this.longHandle.visible = twoHanded;
+    this.spotMark.visible = twoHanded || near > 0.01;
+    this.spotMat.opacity = twoHanded ? 0.85 : near * 0.6;
+    this.spotMat.color.setHex(twoHanded ? 0xffd060 : 0x7fe0ff);
   }
 
   /** World positions of the blade's base and tip. */
