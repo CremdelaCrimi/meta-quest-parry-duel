@@ -74,6 +74,8 @@ export class Game {
 
     scene.add(this.space.group, this.sparks.points);
     this.space.group.add(this.enemyView.root, this.hud.mesh, this.banner.mesh);
+    // Rigged enemy from public/enemy/ if present; ?procedural=1 keeps the built-in one.
+    if (!new URLSearchParams(location.search).has('procedural')) void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
 
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });

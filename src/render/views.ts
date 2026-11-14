@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Duel } from '../core/sim';
 import type { AttackDef, SwordPose, V3 } from '../core/types';
 import { DuelSpace, ENEMY_DIST } from './duelSpace';
+import { RiggedEnemy } from './riggedEnemy';
 
 const D = ENEMY_DIST;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -193,6 +194,20 @@ export class EnemyView {
     this.hitFlash = 1;
   }
 
+  private rigged: RiggedEnemy | null = null;
+
+  /** Swap the procedural body for a rigged model. Keeps the procedural one if anything fails. */
+  async useRigged(manifestUrl: string): Promise<void> {
+    try {
+      this.rigged = await RiggedEnemy.load(manifestUrl, this.bladeMat);
+      this.root.add(this.rigged.root);
+      this.body.visible = this.blade.visible = false;
+      for (const a of this.arms) a.visible = false;
+    } catch (err) {
+      console.info('[enemy] using procedural enemy:', (err as Error).message);
+    }
+  }
+
   /** Swept test: does the segment a->b (world) pass within `r` of the enemy body axis? */
   bodyHit(a: THREE.Vector3, b: THREE.Vector3, space: DuelSpace, r = 0.27): boolean {
     const feet = space.toWorld({ x: 0, y: -space.height + 0.2, z: D }, this.v1);
@@ -285,6 +300,11 @@ export class EnemyView {
 
     this.hitFlash = Math.max(0, this.hitFlash - dtMs / 150);
     this.bodyMat.emissive.setRGB(this.hitFlash * 0.8, this.hitFlash * 0.15, this.hitFlash * 0.1);
+
+    if (this.rigged) {
+      this.rigged.root.position.copy(this.body.position);
+      this.rigged.update(duel, animMs, this.hitFlash);
+    }
   }
 }
 
