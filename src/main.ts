@@ -100,6 +100,7 @@ renderer.setAnimationLoop((time: number, frame?: XRFrame) => {
 (window as unknown as { game: Game }).game = game;
 // Dev only: step and draw one frame by hand (screenshots while the page isn't animating).
 if (import.meta.env.DEV) {
+  (window as unknown as { __camera: THREE.PerspectiveCamera }).__camera = camera;
   (window as unknown as { __step: (t: number) => void }).__step = (t: number) => {
     renderer.setAnimationLoop(null); // manual stepping owns the clock from here on
     game.frame(t);
