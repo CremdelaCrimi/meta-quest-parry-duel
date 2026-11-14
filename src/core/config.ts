@@ -45,11 +45,14 @@ const BASE: Omit<TimingConfig, 'name'> = {
 /** Tight, rewards rhythm, blocking costs only posture. Spam is punished. */
 export const PRESET_SEKIRO_LIKE: TimingConfig = { ...BASE, name: 'Sekiro-like' };
 
-/** Shorter perfect window, but regular blocks still chip HP. */
+/**
+ * Perfect window totals the reference 155 ms (combat-references/), mostly before impact,
+ * with less late grace than Sekiro-like. Regular blocks still chip HP.
+ */
 export const PRESET_LIESOFP_LIKE: TimingConfig = {
   ...BASE,
   name: 'Lies of P-like',
-  perfectEarlyMs: 90,
+  perfectEarlyMs: 125,
   perfectLateMs: 30,
   blockHpMult: 0.4,
   blockPlayerPostureMult: 0.4,

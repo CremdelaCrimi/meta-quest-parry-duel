@@ -107,14 +107,23 @@ describe('parry timing', () => {
     expect(o.offsetMs!).toBeLessThan(0);
   });
 
-  it('the Lies of P preset has a narrower perfect window', () => {
-    const run = (timing: typeof PRESET_SEKIRO_LIKE) => {
+  it('the Lies of P preset matches the 155 ms reference window, with less late grace', () => {
+    const lop = PRESET_LIESOFP_LIKE;
+    expect(lop.perfectEarlyMs + lop.perfectLateMs).toBe(155);
+
+    // 1000 Hz so the guard entry lands within ~1 ms of `at`.
+    const run = (timing: typeof PRESET_SEKIRO_LIKE, at: number) => {
       const d = makeDuel({ timing });
       script(d, L, START);
-      return outcome(drive(d, guardAt(POSES.left, S - 110, 10), 2200))!.type;
+      return outcome(drive(d, guardAt(POSES.left, at, 2), 2200, 1000))!;
     };
-    expect(run(PRESET_SEKIRO_LIKE)).toBe('perfect');
-    expect(run(PRESET_LIESOFP_LIKE)).toBe('block');
+    // ~34 ms late: inside Sekiro-like's 40 ms late grace, outside Lies of P-like's 30 ms.
+    const sek = run(PRESET_SEKIRO_LIKE, S + 33);
+    const lp = run(PRESET_LIESOFP_LIKE, S + 33);
+    expect(sek.offsetMs!).toBeGreaterThan(31);
+    expect(sek.offsetMs!).toBeLessThan(38);
+    expect(sek.type).toBe('perfect');
+    expect(lp.type).toBe('block');
   });
 });
 
