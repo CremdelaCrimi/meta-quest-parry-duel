@@ -80,6 +80,12 @@ export class Game {
     place(this.banner.mesh, { x: 0, y: 0.5, z: 1.4 });
     this.cards.forEach((c, i) => place(c.mesh, { x: (i - 1) * 0.36, y: -0.35, z: 0.75 }));
 
+    // ?preset=1 (Lies of P-like), ?preset=2 (Easy). Startup only, so P still cycles through all.
+    const preset = Number(new URLSearchParams(location.search).get('preset'));
+    if (Number.isInteger(preset) && preset > 0 && preset < PRESETS.length) {
+      this.presetIdx = preset;
+      Object.assign(this.timing, PRESETS[preset]);
+    }
     this.applyUrlOverrides();
     this.newDuel(0);
     this.setPhase('calibrate', 0);
@@ -364,14 +370,7 @@ export class Game {
     const tm = this.timing as unknown as Record<string, unknown>;
     for (const [k, v] of q) {
       if (typeof tm[k] === 'number' && Number.isFinite(Number(v))) tm[k] = Number(v);
-    }
-    const preset = q.get('preset');
-    if (preset !== null && this.presetIdx === 0 && preset === '1') {
-      this.presetIdx = 1;
-      Object.assign(this.timing, PRESETS[1]);
-      this.applyUrlOverrides();
-    }
-  }
+    }  }
 
   // ---------------------------------------------------------------- HUD
 

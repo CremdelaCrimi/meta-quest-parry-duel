@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_GUARD, PRESET_LIESOFP_LIKE, PRESET_SEKIRO_LIKE } from '../src/core/config';
+import { DEFAULT_GUARD, PRESET_EASY, PRESET_LIESOFP_LIKE, PRESET_SEKIRO_LIKE } from '../src/core/config';
 import { DodgeDetector } from '../src/core/dodge';
 import { ATTACKS, ENEMIES } from '../src/core/enemies';
 import { classifyGuard } from '../src/core/guard';
@@ -124,6 +124,19 @@ describe('parry timing', () => {
     expect(sek.offsetMs!).toBeLessThan(38);
     expect(sek.type).toBe('perfect');
     expect(lp.type).toBe('block');
+  });
+});
+
+describe('easy preset', () => {
+  it('has a 250 ms perfect window that parries what Sekiro-like only blocks', () => {
+    expect(PRESET_EASY.perfectEarlyMs + PRESET_EASY.perfectLateMs).toBe(250);
+    const run = (timing: typeof PRESET_SEKIRO_LIKE) => {
+      const d = makeDuel({ timing });
+      script(d, L, START);
+      return outcome(drive(d, guardAt(POSES.left, S - 180, 2), 2200, 1000))!.type;
+    };
+    expect(run(PRESET_SEKIRO_LIKE)).toBe('block');
+    expect(run(PRESET_EASY)).toBe('perfect');
   });
 });
 

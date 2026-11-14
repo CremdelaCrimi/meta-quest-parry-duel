@@ -61,7 +61,18 @@ export const PRESET_LIESOFP_LIKE: TimingConfig = {
   spamMaxEntries: 4,
 };
 
-export const PRESETS = [PRESET_SEKIRO_LIKE, PRESET_LIESOFP_LIKE];
+/**
+ * Accessibility: 250 ms perfect window, the upper of the two values players use as
+ * modded windows in the combat reference. Otherwise the Sekiro-like rules (blocks cost no HP).
+ */
+export const PRESET_EASY: TimingConfig = {
+  ...BASE,
+  name: 'Easy',
+  perfectEarlyMs: 220,
+  perfectLateMs: 30,
+};
+
+export const PRESETS = [PRESET_SEKIRO_LIKE, PRESET_LIESOFP_LIKE, PRESET_EASY];
 
 export function defaultModifiers(): Modifiers {
   return {

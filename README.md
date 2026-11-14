@@ -20,7 +20,8 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 
 ## Tuning
 All feel values live in `src/core/config.ts`. Any of them can be overridden from the URL without a rebuild,
-e.g. `?perfectEarlyMs=150&perfectLateMs=50&iframesMs=400` (add `&preset=1` for the Lies of P–like preset).
+e.g. `?perfectEarlyMs=150&perfectLateMs=50&iframesMs=400` (add `&preset=1` for the Lies of P–like preset, `&preset=2` for the Easy 250 ms accessibility preset;
+P / Y in game cycles presets). `?hitStopMs=` tunes the enemy freeze on a perfect parry.
 The in-headset panel shows each guard's timing relative to the strike (negative = early) so tuning is data-driven.
 
 ## Layout
