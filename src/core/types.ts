@@ -189,6 +189,11 @@ export interface FrameInput {
   ability: AbilityId | null;
   /** Dash started this frame (edge-triggered), or null. */
   dash?: DashDir | null;
+  /**
+   * Block button held at t1 (right grip). A guard only counts while it's held, so pressing it with
+   * the sword already in place is a guard entry at that moment. Omitted = always held (no button).
+   */
+  blockHeld?: boolean;
 }
 
 export type DuelEventType =

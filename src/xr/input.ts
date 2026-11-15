@@ -45,6 +45,8 @@ export interface InputFrame {
   dash: DashDir | null;
   /** Right stick flick left/right (desktop: T): switch training dummy. */
   cycle: number;
+  /** Block button held (level, not edge): right grip. Desktop: Shift or right mouse button. */
+  blockHeld: boolean;
   /** Desktop: a pickup card chosen by number key / click (0-2), else -1. */
   choose: number;
 }
@@ -88,6 +90,7 @@ function emptyFrame(): InputFrame {
     select: false,
     dash: null,
     cycle: 0,
+    blockHeld: false,
     choose: -1,
   };
 }
@@ -179,7 +182,7 @@ export class XRInput implements InputDevice {
       this.offset.set(0, 0, 0);
       this.moveT0 = -1;
     }
-    let rt = false, lt = false, lg = false, x = false, a = false, b = false, y = false, ls = false;
+    let rt = false, lt = false, lg = false, x = false, a = false, b = false, y = false, ls = false, rg = false;
     const axes = [0, 0, 0, 0];
     for (const src of session.inputSources) {
       const gp = src.gamepad;
@@ -193,6 +196,7 @@ export class XRInput implements InputDevice {
       }
       if (src.handedness === 'right') {
         rt = pressed(0);
+        rg = pressed(1);
         a = pressed(4);
         b = pressed(5);
       } else if (src.handedness === 'left') {
@@ -223,6 +227,7 @@ export class XRInput implements InputDevice {
     f.btnY = y && !pv.y;
     f.menu = (y && !pv.y) || (ls && !pv.ls);
     f.select = (rt && !pv.rt) || (a && !pv.a);
+    f.blockHeld = rg;
     Object.assign(pv, { rt, lt, lg, x, a, b, y, ls });
     // Flicks: a stick leaving the centre. Either stick moves through menus; in a fight the left
     // stick dashes and the right stick switches the training dummy.
@@ -348,13 +353,15 @@ export class XRInput implements InputDevice {
 // Desktop fallback: mouse = sword, keys = dodge/abilities. For quick checks without a headset.
 //   Mouse left/right/up/down of centre -> left/right/high/low guard. Click = strike.
 //   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-6 = pick a card,
-//   R = recalibrate, M / Esc = menu (arrows + Enter inside it), arrows = dash, T = next dummy.
+//   R = recalibrate, M / Esc = menu (arrows + Enter inside it), arrows = dash, T = next dummy,
+//   Shift or right mouse button = hold to block.
 
 export class DesktopInput implements InputDevice {
   readonly frame = emptyFrame();
   private mx = 0;
   private my = -0.2;
   private click = false;
+  private rmb = false;
   private keys = new Set<string>();
   private pressedKeys = new Set<string>();
   private lean = new THREE.Vector3();
@@ -375,7 +382,14 @@ export class DesktopInput implements InputDevice {
       this.mx = ((e.clientX - r.left) / r.width) * 2 - 1;
       this.my = -(((e.clientY - r.top) / r.height) * 2 - 1);
     });
-    dom.addEventListener('pointerdown', () => (this.click = true));
+    dom.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) this.rmb = true; // right button = hold to block
+      else this.click = true;
+    });
+    window.addEventListener('pointerup', (e) => {
+      if (e.button === 2) this.rmb = false;
+    });
+    dom.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       if (!this.keys.has(k)) this.pressedKeys.add(k);
@@ -451,6 +465,7 @@ export class DesktopInput implements InputDevice {
     f.navY = pk.has('arrowup') ? -1 : pk.has('arrowdown') ? 1 : 0;
     f.dash = f.navX < 0 ? 'left' : f.navX > 0 ? 'right' : f.navY < 0 ? 'forward' : f.navY > 0 ? 'back' : null;
     f.cycle = pk.has('t') ? 1 : 0;
+    f.blockHeld = this.rmb || this.keys.has('shift');
     f.select = this.click || pk.has('enter') || pk.has(' ');
     pk.clear();
     this.click = false;

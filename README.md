@@ -6,7 +6,7 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  A/D lean, S duck, arrows dash, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
+  Shift / right mouse hold to block, A/D lean, S duck, arrows dash, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
   M / Esc menu, R recalibrate.
 - **Older headsets (Quest 1 / Quest 2):** same link, same controls. The game spots the headset and
   switches to a lighter graphics mode by itself (see *Menu and settings*).
@@ -80,7 +80,7 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 
 | Input | Action |
 |---|---|
-| Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
+| Right hand | Sword. **Block**: put it where the ghost sword shows **and hold the right grip** (the blade glows blue while held) |
 | Swing into enemy | **Strike**. While he waits he guards one side: hit the side his sword isn't on (green ring). Lands anywhere while he swings; counter after a perfect parry; finisher when posture breaks |
 | Lean / duck | **Dodge** the red must-dodge attacks: lean out of a thrust, duck under a sweep (Duelist and Sentinel) |
 | Left stick flick | **Dash** left / right / toward / away (see *Dash*) |
@@ -105,6 +105,11 @@ or pick Difficulty in the menu). `?hitStopMs=` tunes the enemy freeze on a perfe
 The in-headset panel shows each guard's timing relative to the strike (negative = early) so tuning is data-driven.
 
 ## Reading a parry
+**Block button:** a guard only counts while the right grip is held (desktop: Shift or the right mouse
+button). Holding it with the sword in place is a block; pressing it, with the sword already in place
+and still, just as the ring turns gold is a perfect parry: the press is the guard's entry time. Letting
+go drops the guard. Menu → Block button → Off goes back to sword position alone (`?blockButton=0`).
+
 A guard is judged on **timing** (entry vs the strike), **angle** (blade square to the attack) and
 **steadiness** (blade held still for `steadyMs` before the hit: set your guard, don't swing into it).
 All three = perfect (gold). Otherwise the block is coloured by what went wrong: blue = timing,

@@ -201,11 +201,12 @@ export class PauseMenu {
           ['A', 'Stats panel · select in menus', TEXT],
           ['Stick', 'Flick ←→: switch training dummy', TEXT],
           ['Trigger', 'Start · confirm · pick a card', GOLD],
-          ['Grip', 'Not used: you hold the sword', DIM],
+          ['Grip', 'HOLD = BLOCK (guard counts while held)', '#6fb6ff'],
         ]);
       } else {
         const keys: Array<[string, string]> = [
           ['Mouse', 'Sword: left / right / high / low guard'],
+          ['Shift / RMB', 'Hold to block'],
           ['Click', 'Start · strike · pick'],
           ['A / D · S', 'Lean (dodge thrust) · duck (dodge sweep)'],
           ['Arrows', 'Dash left / right / toward / away'],

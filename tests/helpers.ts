@@ -90,6 +90,8 @@ export function drive(
     twoHanded?: boolean;
     abilityAt?: Array<[number, 'slowTime' | 'ward']>;
     dashAt?: Array<[number, DashDir]>;
+    /** Block button state over time (omit = no button, always held). */
+    heldAt?: (t: number) => boolean;
   } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
@@ -128,6 +130,7 @@ export function drive(
       twoHanded: extra.twoHanded,
       ability,
       dash,
+      blockHeld: extra.heldAt?.(t1),
     });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;

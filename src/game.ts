@@ -150,6 +150,7 @@ export class Game {
   private tl: (TimelineData & { realStart: number }) | null = null;
   private readonly trainStats = { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 };
   private dashReadyAt = 0;
+  private blockWas = false;
   /** main.ts applies a graphics level (foveation, refresh rate, render scale). */
   onGraphics: (level: 'high' | 'low') => void = () => {};
   private calloutKey = '';
@@ -318,6 +319,7 @@ export class Game {
     }
 
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
+    this.sword.guarding = this.settings.blockButton && f.blockHeld && f.hasSword;
     this.sword.update(dt);
     this.sparks.update(dt);
     this.waves.update(dt, f.headPos);
@@ -404,6 +406,12 @@ export class Game {
       this.setDummy(DUMMY_MODES[(i + f.cycle + DUMMY_MODES.length) % DUMMY_MODES.length].id, t);
     }
 
+    // Block button: guards only count while it's held (menu → Block button turns it off).
+    const useBtn = this.settings.blockButton;
+    const held = useBtn ? f.blockHeld : undefined;
+    if (useBtn && f.blockHeld && !this.blockWas) this.input.pulse('right', 0.15, 12);
+    this.blockWas = useBtn && f.blockHeld;
+
     let ability: AbilityId | null = null;
     if (f.leftTrigger) ability = 'slowTime';
     else if (f.btnX) ability = 'ward'; // left grip is for holding the sword with both hands
@@ -421,6 +429,7 @@ export class Game {
       twoHanded: f.twoHanded,
       ability,
       dash,
+      blockHeld: held,
     });
     for (const ev of this.duel.events) {
       this.onEvent(ev, t);
@@ -729,7 +738,8 @@ export class Game {
       else if (att.perilous === 'sweep') out.push(['RED SWEEP: DODGE', C.RED, 44], ['Duck or flick the left stick back just before it lands. Can\'t be blocked.', C.TEXT, 30]);
       else {
         const [title, how] = calloutFor(att);
-        out.push([`BLOCK: ${title.replace(/^\S+\s+/, '')}`, C.BLUE, 40], [`${how}. Get there early, then hold still: gold ring = perfect.`, C.TEXT, 30]);
+        const btn = this.settings.blockButton ? (this.isXR ? ' and HOLD RIGHT GRIP' : ' and HOLD SHIFT') : '';
+        out.push([`BLOCK: ${title.replace(/^\S+\s+/, '')}`, C.BLUE, 40], [`${how}${btn}. Be in place and still when the ring turns gold.`, C.TEXT, 30]);
       }
       out.push([`Lands in ${Math.round(left)} ms`, C.DIM, 28]);
     } else if (att && e.struck) {
@@ -878,6 +888,16 @@ export class Game {
         change: (d) => {
           this.setPreset((this.presetIdx + d + PRESETS.length) % PRESETS.length);
           save();
+        },
+      },
+      {
+        label: 'Block button',
+        value: () => (s.blockButton ? (this.isXR ? 'Hold right grip' : 'Hold Shift / right mouse') : 'Off'),
+        hint: () => (s.blockButton ? 'Guard only counts while held; press it in time = perfect' : 'Sword position alone blocks'),
+        change: () => {
+          s.blockButton = !s.blockButton;
+          save();
+          this.drawHelp();
         },
       },
       {
@@ -1158,9 +1178,10 @@ export class Game {
       line('HOW TO PLAY', '800 54px system-ui, sans-serif', '#ffffff', 52);
       line(xr ? 'No button to block or attack. Your sword does it.' : 'Your mouse is the sword. Nothing to press to block.', '500 30px system-ui, sans-serif', '#9aa3b0', 70);
 
-      line('BLOCK: match the glowing ghost sword', '700 36px system-ui, sans-serif', COLORS.block, 46);
-      line('A ring closes on it. Be there when it turns GOLD,', '500 29px system-ui, sans-serif', '#d8dce4', 38);
-      line('then hold still until the swing lands.', '500 29px system-ui, sans-serif', COLORS.perfect, 50);
+      const btn = this.settings.blockButton;
+      line(btn ? (xr ? 'BLOCK: ghost sword + HOLD RIGHT GRIP' : 'BLOCK: ghost sword + HOLD SHIFT') : 'BLOCK: match the glowing ghost sword', '700 36px system-ui, sans-serif', COLORS.block, 46);
+      line(btn ? 'Blade glows blue while held. Press it when the ring' : 'A ring closes on it. Be there when it turns GOLD,', '500 29px system-ui, sans-serif', '#d8dce4', 38);
+      line(btn ? 'turns GOLD, sword in place and still = PERFECT.' : 'then hold still until the swing lands.', '500 29px system-ui, sans-serif', COLORS.perfect, 50);
       line('↓  Vertical chop: sword flat above your head', '500 29px system-ui, sans-serif', '#d8dce4', 40);
       line('→ ←  Horizontal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 40);
       line('↘ ↙  Diagonal: sword upright on that side', '500 29px system-ui, sans-serif', '#d8dce4', 66);

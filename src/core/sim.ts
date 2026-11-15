@@ -114,6 +114,10 @@ export class Duel {
   private readonly rng: Rng;
   /** Separate stream for guard shifts, so they never change which combos the enemy picks. */
   private readonly guardRng: Rng;
+  /** Block button at the end of the last frame (true when the game uses no button). */
+  private heldPrev = true;
+  /** Block button at the end of this frame. */
+  private heldCurr = true;
   /** Grip this frame. Guards are judged with the grip held at that instant. */
   twoHanded = false;
   private readonly ai: boolean;
@@ -229,8 +233,10 @@ export class Duel {
   step(inp: FrameInput): void {
     this.events.length = 0;
     this.twoHanded = !!inp.twoHanded; // per frame: a grip change is slower than a frame anyway
+    this.heldCurr = inp.blockHeld ?? true;
     if (this.player.dead || this.enemy.state === 'dead') {
       this.time = inp.t1;
+      this.heldPrev = this.heldCurr;
       return;
     }
 
@@ -255,7 +261,7 @@ export class Duel {
       lerpPose(this.poseB, inp.swordPrev, inp.swordCurr, fb);
       const tipSpeed = dist(this.poseA.tip, this.poseB.tip) / Math.max(1e-6, (b - a) / 1000);
       if (tipSpeed > this.steadyLimit) this.lastFastT = b;
-      classifyGuard(this.poseB, this.guardCfg, this.readB);
+      this.classifyAt(this.poseB, fb, this.readB);
       let transT = NaN;
       if (this.readB.dir !== this.guard.dir) {
         transT = this.bisect(inp, fa, fb, this.guard.dir);
@@ -296,6 +302,7 @@ export class Duel {
       if (this.player.dead || e.state === 'dead') break;
     }
 
+    this.heldPrev = this.heldCurr;
     if (inp.strikeSpeed > 0 && !this.player.dead) this.onPlayerStrike(inp.t1, inp.strikeZone ?? 'center', !!inp.strikePoke);
     this.regen(span, inp.t1);
     this.time = inp.t1;
@@ -309,11 +316,22 @@ export class Duel {
     for (let i = 0; i < BISECT_ITERS; i++) {
       const mid = (lo + hi) * 0.5;
       lerpPose(this.poseM, inp.swordPrev, inp.swordCurr, mid);
-      classifyGuard(this.poseM, this.guardCfg, this.readM);
+      this.classifyAt(this.poseM, mid, this.readM);
       if (this.readM.dir !== prevDir) hi = mid;
       else lo = mid;
     }
     return inp.t0 + (inp.t1 - inp.t0) * hi;
+  }
+
+  /**
+   * Guard reading at a fraction of the frame, with the block button applied. Gamepads are read once
+   * a frame, so a press or release is placed mid-frame: the unbiased guess, and still sub-frame.
+   */
+  private classifyAt(pose: SwordPose, frac: number, out: GuardReading): GuardReading {
+    classifyGuard(pose, this.guardCfg, out);
+    const held = frac < 0.5 ? this.heldPrev : this.heldCurr;
+    if (!held) out.dir = null;
+    return out;
   }
 
   private applyGuard(r: GuardReading, t: number): void {

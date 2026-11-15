@@ -133,10 +133,17 @@ export class SwordView {
     this.flashT = 1;
   }
 
+  /** Block button held: the blade glows a steady blue so you always know your guard is up. */
+  guarding = false;
+
   update(dtMs: number): void {
-    if (this.flashT <= 0) return;
-    this.flashT = Math.max(0, this.flashT - dtMs / 180);
-    this.bladeMat.emissiveIntensity = this.flashT * 2;
+    if (this.flashT > 0) {
+      this.flashT = Math.max(0, this.flashT - dtMs / 180);
+      this.bladeMat.emissiveIntensity = this.flashT * 2;
+      return;
+    }
+    this.bladeMat.emissive.setHex(0x3a8cff);
+    this.bladeMat.emissiveIntensity = this.guarding ? 0.7 : 0;
   }
 }
 

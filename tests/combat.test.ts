@@ -345,6 +345,35 @@ describe('dash', () => {
   });
 });
 
+describe('block button', () => {
+  it('sword in place without the button is a hit', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    expect(outcome(drive(d, guardAt(POSES.left, S - 60), 2200, 90, { heldAt: () => false }))?.type).toBe('hit');
+  });
+
+  it('pressing the button with the sword already in place parries at the press', () => {
+    const d = makeDuel({ steady: true });
+    script(d, L, START);
+    const o = outcome(drive(d, guardAt(POSES.left, S - 500), 2200, 90, { heldAt: (t) => t >= S - 60 }))!;
+    expect(o.type).toBe('perfect');
+    expect(o.offsetMs!).toBeGreaterThan(-80);
+    expect(o.offsetMs!).toBeLessThan(-40);
+  });
+
+  it('holding the button long before is only a block', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    expect(outcome(drive(d, guardAt(POSES.left, S - 500), 2200, 90, { heldAt: () => true }))?.type).toBe('block');
+  });
+
+  it('letting go before the strike drops the guard', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    expect(outcome(drive(d, guardAt(POSES.left, S - 300), 2200, 90, { heldAt: (t) => t < S - 30 }))?.type).toBe('hit');
+  });
+});
+
 describe('training dummy', () => {
   it('without a guard every idle strike lands', () => {
     const d = makeDuel({ guards: false });

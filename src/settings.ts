@@ -13,11 +13,13 @@ export interface Settings {
   quality: Quality;
   /** Controller rumble strength, 0..1. */
   haptics: number;
+  /** Guards only count while the block button (right grip) is held. Off = sword position alone. */
+  blockButton: boolean;
 }
 
 const KEY = 'parryDuel.settings';
 
-export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1 };
+export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true };
 
 export function loadSettings(): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };
@@ -30,6 +32,7 @@ export function loadSettings(): Settings {
   if (q.has('guides')) s.guides = q.get('guides') !== '0';
   if (q.has('callouts')) s.callouts = q.get('callouts') === '1';
   if (q.has('results')) s.results = q.get('results') !== '0';
+  if (q.has('blockButton')) s.blockButton = q.get('blockButton') !== '0';
   const ql = q.get('quality');
   if (ql === 'auto' || ql === 'high' || ql === 'low') s.quality = ql;
   return s;
