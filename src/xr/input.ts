@@ -33,6 +33,13 @@ export interface InputFrame {
   btnA: boolean;
   btnB: boolean;
   btnY: boolean;
+  /** Open/close the menu: Y or left thumbstick press (desktop: M or Esc). */
+  menu: boolean;
+  /** Thumbstick flicks (either stick) as menu steps: -1 / 0 / +1. Up is -1. Desktop: arrow keys. */
+  navX: number;
+  navY: number;
+  /** Menu confirm: right trigger or A (desktop: click, Enter or Space). */
+  select: boolean;
   /** Desktop: a pickup card chosen by number key / click (0-2), else -1. */
   choose: number;
 }
@@ -41,6 +48,8 @@ export interface InputDevice {
   readonly frame: InputFrame;
   poll(xrFrame: XRFrame | undefined): void;
   pulse(hand: 'left' | 'right', intensity: number, ms: number): void;
+  /** Rumble strength multiplier from the menu (0 = off). */
+  hapticScale: number;
 }
 
 function emptyFrame(): InputFrame {
@@ -58,6 +67,10 @@ function emptyFrame(): InputFrame {
     btnA: false,
     btnB: false,
     btnY: false,
+    menu: false,
+    navX: 0,
+    navY: 0,
+    select: false,
     choose: -1,
   };
 }
@@ -67,7 +80,11 @@ function emptyFrame(): InputFrame {
 
 export class XRInput implements InputDevice {
   readonly frame = emptyFrame();
-  private readonly prev = { rt: false, lt: false, lg: false, x: false, a: false, b: false, y: false };
+  private readonly prev = { rt: false, lt: false, lg: false, x: false, a: false, b: false, y: false, ls: false };
+  /** Stick direction last frame, so one flick = one menu step (with hysteresis). */
+  private stickX = 0;
+  private stickY = 0;
+  hapticScale = 1;
   private readonly grips: THREE.Group[] = [];
   private rightGrip: THREE.Group | null = null;
   private leftGripObj: THREE.Group | null = null;
@@ -131,11 +148,16 @@ export class XRInput implements InputDevice {
       f.headQuat.set(o.x, o.y, o.z, o.w);
     }
 
-    let rt = false, lt = false, lg = false, x = false, a = false, b = false, y = false;
+    let rt = false, lt = false, lg = false, x = false, a = false, b = false, y = false, ls = false;
+    let sx = 0, sy = 0;
     for (const src of session.inputSources) {
       const gp = src.gamepad;
       if (!gp) continue;
       const pressed = (i: number) => !!gp.buttons[i]?.pressed;
+      // xr-standard: axes[2], axes[3] are the thumbstick (Quest 1/2/3 Touch controllers all match).
+      const ax = gp.axes[2] ?? 0, ay = gp.axes[3] ?? 0;
+      if (Math.abs(ax) > Math.abs(sx)) sx = ax;
+      if (Math.abs(ay) > Math.abs(sy)) sy = ay;
       if (src.handedness === 'right') {
         rt = pressed(0);
         a = pressed(4);
@@ -145,6 +167,7 @@ export class XRInput implements InputDevice {
         lg = pressed(1);
         x = pressed(4);
         y = pressed(5);
+        ls = pressed(3);
       }
     }
     // Sword: three.js already updated the grip poses for this frame before our callback.
@@ -165,7 +188,15 @@ export class XRInput implements InputDevice {
     f.btnA = a && !pv.a;
     f.btnB = b && !pv.b;
     f.btnY = y && !pv.y;
-    Object.assign(pv, { rt, lt, lg, x, a, b, y });
+    f.menu = (y && !pv.y) || (ls && !pv.ls);
+    f.select = (rt && !pv.rt) || (a && !pv.a);
+    Object.assign(pv, { rt, lt, lg, x, a, b, y, ls });
+    const step = (v: number, last: number) => (Math.abs(v) > 0.6 ? Math.sign(v) : Math.abs(v) < 0.3 ? 0 : last);
+    const nx = step(sx, this.stickX), ny = step(sy, this.stickY);
+    f.navX = nx !== this.stickX ? nx : 0;
+    f.navY = ny !== this.stickY ? ny : 0;
+    this.stickX = nx;
+    this.stickY = ny;
     f.choose = -1;
   }
 
@@ -236,11 +267,11 @@ export class XRInput implements InputDevice {
 
   pulse(hand: 'left' | 'right', intensity: number, ms: number): void {
     const session = this.renderer.xr.getSession();
-    if (!session) return;
+    if (!session || this.hapticScale <= 0) return;
     for (const src of session.inputSources) {
       if (src.handedness !== hand) continue;
       const act = src.gamepad?.hapticActuators?.[0] as unknown as { pulse?: (v: number, ms: number) => Promise<boolean> } | undefined;
-      void act?.pulse?.(intensity, ms);
+      void act?.pulse?.(Math.min(1, intensity * this.hapticScale), ms);
     }
   }
 }
@@ -248,8 +279,8 @@ export class XRInput implements InputDevice {
 // ---------------------------------------------------------------------------
 // Desktop fallback: mouse = sword, keys = dodge/abilities. For quick checks without a headset.
 //   Mouse left/right/up/down of centre -> left/right/high/low guard. Click = strike.
-//   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-3 = pick reward,
-//   R = recalibrate, P = preset.
+//   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-6 = pick a card,
+//   R = recalibrate, M / Esc = menu (arrows + Enter inside it).
 
 export class DesktopInput implements InputDevice {
   readonly frame = emptyFrame();
@@ -335,11 +366,16 @@ export class DesktopInput implements InputDevice {
     this.sword.setGrip(f.twoHanded, 0);
     f.btnA = pk.has('h');
     f.btnB = pk.has('r');
-    f.btnY = pk.has('p');
+    f.btnY = false; // Y opens the menu in VR; on desktop that's M (see f.menu)
     f.choose = ['1', '2', '3', '4', '5', '6'].findIndex((k) => pk.has(k));
+    f.menu = pk.has('m') || pk.has('escape');
+    f.navX = pk.has('arrowleft') ? -1 : pk.has('arrowright') ? 1 : 0;
+    f.navY = pk.has('arrowup') ? -1 : pk.has('arrowdown') ? 1 : 0;
+    f.select = this.click || pk.has('enter') || pk.has(' ');
     pk.clear();
     this.click = false;
   }
 
   pulse(): void {}
+  hapticScale = 1;
 }

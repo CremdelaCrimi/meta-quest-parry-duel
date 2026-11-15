@@ -6,7 +6,32 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, P preset, R recalibrate.
+  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, M / Esc menu, R recalibrate.
+- **Older headsets (Quest 1 / Quest 2):** same link, same controls. The game spots the headset and
+  switches to a lighter graphics mode by itself (see *Menu and settings*).
+
+## Menu and settings
+Press **Y** (or click the left thumbstick) at any time to pause. The fight freezes until you close it.
+Flick either thumbstick up/down to choose a row and left/right to change it; trigger or A selects;
+Y or B closes. Desktop: M or Esc, arrow keys, Enter.
+
+| Row | What it does |
+|---|---|
+| Controller buttons | A drawing of both controllers with what every button does |
+| Difficulty | Sekiro-like (standard) / Lies of P-like / Easy (250 ms perfect window) |
+| Swing guides | Ghost sword and swing path on or off |
+| Swing names | Name every swing above the enemy, or only in the Trainer fight |
+| Result text | PERFECT / BLOCK line above the enemy on or off |
+| Rumble | Off / Low / Full |
+| Graphics | Auto / High / Low (below) |
+| Re-center arena | Same as B |
+| New run | Back to the weapon and relic choice |
+
+Settings are remembered between visits (`parryDuel.settings` in localStorage); URL parameters still
+win at startup. **Graphics:** High renders at full resolution at 90 Hz; Low (for Quest 1 and 2) renders
+at 80% resolution with stronger foveation at 72 Hz. Auto picks Low on Quest 1 / 2 and High on Quest 3,
+3S and Pro, from the browser's user agent (`src/settings.ts`, `?quality=low|high`). Foveation and refresh
+rate change at once; sharpness changes next time you enter VR.
 
 ## Controls (Quest)
 There is no block or attack button: the sword does both. A how-to-play panel sits on your right
@@ -20,8 +45,9 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Left grip, hand on the handle | **Two-handed grip** (see below) |
 | X | Ward: absorb the next hit (every run starts with it) |
 | Left trigger | Time Sigil (once picked up) |
-| Right trigger | Start / confirm |
-| A / B / Y | Hide panels / re-center / switch timing preset |
+| Right trigger | Start / confirm / pick a card |
+| **Y** or left stick press | **Menu**: pause, settings, button map |
+| A / B | Stats panel / re-center |
 
 Three swing shapes, each named above the enemy as it winds up:
 **vertical** (chop down: sword flat above your head), **horizontal** (level sweep from one side:
@@ -32,7 +58,7 @@ Your HP and posture are on the strip under the enemy; a hit flashes the view red
 ## Tuning
 All feel values live in `src/core/config.ts`. Any of them can be overridden from the URL without a rebuild,
 e.g. `?perfectEarlyMs=150&perfectLateMs=50&iframesMs=400` (add `&preset=1` for the Lies of P–like preset, `&preset=2` for the Easy 250 ms accessibility preset;
-P / Y in game cycles presets). `?hitStopMs=` tunes the enemy freeze on a perfect parry.
+or pick Difficulty in the menu). `?hitStopMs=` tunes the enemy freeze on a perfect parry.
 The in-headset panel shows each guard's timing relative to the strike (negative = early) so tuning is data-driven.
 
 ## Reading a parry

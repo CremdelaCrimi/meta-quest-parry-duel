@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { Sfx } from './audio/sfx';
 import { Game } from './game';
+import { GRAPHICS, loadSettings, resolveQuality } from './settings';
 import { DuelSpace } from './render/duelSpace';
 import { SwordView } from './render/views';
 import { DesktopInput, XRInput } from './xr/input';
@@ -13,8 +14,11 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
-renderer.xr.setFramebufferScaleFactor(1.0);
-renderer.xr.setFoveation(0.5); // fixed foveated rendering: cheap GPU savings at the edges
+// Graphics level: Quest 3 / Pro run full resolution at 90 Hz; Quest 1 / 2 get the lighter mode
+// (menu → Graphics, or ?quality=low|high). Render scale can only change outside a VR session.
+let gfx = GRAPHICS[resolveQuality(loadSettings().quality)];
+renderer.xr.setFramebufferScaleFactor(gfx.scale);
+renderer.xr.setFoveation(gfx.foveation); // fixed foveated rendering: cheap GPU savings at the edges
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -63,13 +67,7 @@ renderer.domElement.addEventListener('pointerdown', () => sfx.init());
 
 renderer.xr.addEventListener('sessionstart', () => {
   sfx.init();
-  const session = renderer.xr.getSession()!;
-  // Ask for 90 Hz (Quest 3 supports 72/80/90/120). Higher rate = lower motion-to-photon latency.
-  const rates = session.supportedFrameRates;
-  if (rates && session.updateTargetFrameRate) {
-    const want = rates.includes(90) ? 90 : Math.max(...rates);
-    void session.updateTargetFrameRate(want).catch(() => undefined);
-  }
+  setRate(gfx.hz);
   game.input = xrInput;
   game.isXR = true;
 });
@@ -78,6 +76,24 @@ renderer.xr.addEventListener('sessionend', () => {
   game.input = desktopInput;
   game.isXR = false;
 });
+
+/** Ask for a refresh rate (Quest 2/3 support 72/80/90/120; Quest 1 only 72). Higher = lower latency. */
+function setRate(hz: number): void {
+  const session = renderer.xr.getSession();
+  const rates = session?.supportedFrameRates;
+  if (!session || !rates || !session.updateTargetFrameRate) return;
+  const want = rates.includes(hz) ? hz : Math.max(...Array.from(rates).filter((r) => r <= hz), Math.min(...rates));
+  void session.updateTargetFrameRate(want).catch(() => undefined);
+}
+
+// The menu changes graphics live: foveation and refresh rate now, render scale on the next entry.
+game.onGraphics = (level) => {
+  gfx = GRAPHICS[level];
+  renderer.xr.setFoveation(gfx.foveation);
+  if (!renderer.xr.isPresenting) renderer.xr.setFramebufferScaleFactor(gfx.scale);
+  setRate(gfx.hz);
+};
+renderer.xr.addEventListener('sessionend', () => renderer.xr.setFramebufferScaleFactor(gfx.scale));
 
 document.body.appendChild(
   VRButton.createButton(renderer, { requiredFeatures: ['local-floor'], optionalFeatures: [] }),

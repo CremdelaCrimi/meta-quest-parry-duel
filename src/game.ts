@@ -13,6 +13,10 @@ import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
 import { ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
+import { PauseMenu } from './render/pauseMenu';
+import type { MenuItem } from './render/pauseMenu';
+import { headsetName, loadSettings, resolveQuality, saveSettings } from './settings';
+import type { Quality } from './settings';
 
 type Phase = 'calibrate' | 'loadout' | 'fight' | 'won' | 'reward' | 'dead';
 /** What the cards are offering: a boon after a win, or the weapon / relic before a run. */
@@ -109,9 +113,14 @@ export class Game {
   private readonly enemyPanel = new CanvasPanel(1024, 200, 0.85);
   /** Names the incoming swing and how to block it (Trainer fight only; ?callouts=1 keeps it on). */
   private readonly callout = new CanvasPanel(1024, 170, 0.75);
-  private readonly calloutsAlways = new URLSearchParams(location.search).get('callouts') === '1';
-  /** Result line above the enemy (PERFECT, BLOCK · too early...). ?results=0 leaves it to colour, sound and haptics. */
-  private readonly showResults = new URLSearchParams(location.search).get('results') !== '0';
+  /** Menu settings (difficulty, guides, callouts, result text, rumble, graphics), remembered between visits. */
+  readonly settings = loadSettings();
+  /** Pause menu with settings and a controller map (Y or left stick press). */
+  private readonly pause: PauseMenu;
+  private pauseOffset = 0;
+  private lastRaw = NaN;
+  /** main.ts applies a graphics level (foveation, refresh rate, render scale). */
+  onGraphics: (level: 'high' | 'low') => void = () => {};
   private calloutKey = '';
   private statusAt = 0;
   /** Stats panel during fights (A toggles); it always shows on the victory and death screens. */
@@ -170,7 +179,6 @@ export class Game {
     // The simple built-in swordsman is the default; ?enemy=rigged loads the Tripo/Mixamo model from public/enemy/.
     const q = new URLSearchParams(location.search);
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
-    this.enemyView.guides = q.get('guides') !== '0';
     for (const c of this.cards) this.space.group.add(c.mesh);
 
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });
@@ -182,33 +190,56 @@ export class Game {
     this.callout.mesh.visible = false;
     this.drawHelp();
 
-    // ?preset=1 (Lies of P-like), ?preset=2 (Easy). Startup only, so P still cycles through all.
-    const preset = Number(new URLSearchParams(location.search).get('preset'));
-    if (Number.isInteger(preset) && preset > 0 && preset < PRESETS.length) {
-      this.presetIdx = preset;
-      Object.assign(this.timing, PRESETS[preset]);
-    }
-    this.applyUrlOverrides();
+    // Difficulty: the saved menu choice, or ?preset=1 (Lies of P-like) / ?preset=2 (Easy).
+    const preset = Number(new URLSearchParams(location.search).get('preset') ?? this.settings.presetIdx);
+    this.setPreset(Number.isInteger(preset) && preset >= 0 && preset < PRESETS.length ? preset : 0);
+    this.enemyView.guides = this.settings.guides;
+    this.pause = new PauseMenu(this.menuItems(), () => this.menuStatus(), () => this.isXR);
+    const pm = this.pause.panel.mesh.material as THREE.MeshBasicMaterial;
+    pm.depthTest = false; // always drawn over the frozen fight
+    scene.add(this.pause.panel.mesh);
     this.newDuel(0);
     this.setPhase('calibrate', 0);
   }
 
   // ---------------------------------------------------------------- frame
 
-  frame(tIn: number, xrFrame?: XRFrame): void {
+  frame(tRaw: number, xrFrame?: XRFrame): void {
+    // While the menu is open the game clock stands still, so the fight resumes exactly where it was.
+    if (this.pause.isOpen && !Number.isNaN(this.lastRaw)) this.pauseOffset += tRaw - this.lastRaw;
+    this.lastRaw = tRaw;
+    const tIn = tRaw - this.pauseOffset;
     const t = Number.isNaN(this.lastT) ? tIn : Math.max(tIn, this.lastT + 0.1);
     const dt = Number.isNaN(this.lastT) ? 1000 / this.targetHz() : Math.min(100, t - this.lastT);
     this.lastT = t;
     this.trackFrame(dt);
 
+    this.input.hapticScale = this.settings.haptics;
     this.input.poll(xrFrame);
     const f = this.input.frame;
+
+    if (f.menu) {
+      this.sfx.play('ui');
+      if (this.pause.isOpen) this.closeMenu();
+      else {
+        this.pause.open(f.headPos, f.headQuat);
+        this.vignette.set(f.headPos, f.headQuat, 0, 0);
+      }
+      return;
+    }
+    if (this.pause.isOpen) {
+      if (this.pause.update(f)) {
+        this.sfx.play('ui');
+        this.input.pulse('right', 0.2, 15);
+      }
+      if (!this.pause.isOpen) this.resetPrev = true; // closed from inside (Resume / B)
+      return;
+    }
 
     if (f.btnB && this.phase !== 'calibrate') {
       this.space.calibrate(f.headPos, f.headQuat);
       this.flashResult('Recalibrated', COLORS.info, t);
     }
-    if (f.btnY) this.cyclePreset(t);
     if (f.btnA) {
       if (this.phase === 'fight') this.statsInFight = !this.statsInFight;
       else this.hudOn = !this.hudOn;
@@ -561,16 +592,117 @@ export class Game {
       this.showBanner(
         'PARRY DUEL',
         COLORS.info,
-        this.isXR ? 'Read the panel on the right, face forward, pull RIGHT TRIGGER' : 'Read the panel on the right, then click to begin',
+        this.isXR ? 'Face forward, pull RIGHT TRIGGER · Y = menu & buttons' : 'Click to begin · M = menu & keys',
       );
     }
   }
 
-  private cyclePreset(t: number): void {
-    this.presetIdx = (this.presetIdx + 1) % PRESETS.length;
-    Object.assign(this.timing, PRESETS[this.presetIdx]);
+  /** Difficulty preset. The live duel shares this.timing, so a change applies mid-fight. */
+  private setPreset(i: number): void {
+    this.presetIdx = i;
+    this.settings.presetIdx = i;
+    Object.assign(this.timing, PRESETS[i]);
     this.applyUrlOverrides();
-    this.flashResult(`Preset: ${this.timing.name}`, COLORS.info, t);
+  }
+
+  // ---------------------------------------------------------------- pause menu
+
+  private closeMenu(): void {
+    this.pause.close();
+    this.resetPrev = true; // the sword moved while paused: don't read that as a swing
+  }
+
+  private menuStatus(): string {
+    const lvl = resolveQuality(this.settings.quality);
+    const where =
+      this.phase === 'calibrate' ? 'Start screen' : this.phase === 'loadout' ? 'Loadout' : `Fight ${this.run.fight + 1} · ${this.duel.enemy.def.name}`;
+    return `${where} · ${headsetName()} · graphics ${lvl}`;
+  }
+
+  /** Rows of the pause menu. Each setting saves as soon as it changes. */
+  private menuItems(): MenuItem[] {
+    const s = this.settings;
+    const onOff = (v: boolean) => (v ? 'On' : 'Off');
+    const save = () => saveSettings(s);
+    const qualities: Quality[] = ['auto', 'high', 'low'];
+    const step = <T,>(list: readonly T[], cur: T, dir: number): T => list[(Math.max(0, list.indexOf(cur)) + dir + list.length) % list.length];
+    return [
+      { label: 'Resume', act: () => this.closeMenu() },
+      { label: 'Controller buttons', hint: () => 'What every button does', act: () => this.pause.showControls() },
+      {
+        label: 'Difficulty',
+        value: () => this.timing.name,
+        hint: () => (this.presetIdx === 2 ? 'Wide 250 ms perfect window' : this.presetIdx === 1 ? 'Tighter, faster enemies' : 'Standard timing'),
+        change: (d) => {
+          this.setPreset((this.presetIdx + d + PRESETS.length) % PRESETS.length);
+          save();
+        },
+      },
+      {
+        label: 'Swing guides',
+        value: () => onOff(s.guides),
+        hint: () => 'Ghost sword and swing path',
+        change: () => {
+          s.guides = !s.guides;
+          this.enemyView.guides = s.guides;
+          save();
+        },
+      },
+      {
+        label: 'Swing names',
+        value: () => (s.callouts ? 'Always' : 'Trainer only'),
+        change: () => {
+          s.callouts = !s.callouts;
+          save();
+        },
+      },
+      {
+        label: 'Result text',
+        value: () => onOff(s.results),
+        hint: () => 'PERFECT / BLOCK above the enemy',
+        change: () => {
+          s.results = !s.results;
+          save();
+        },
+      },
+      {
+        label: 'Rumble',
+        value: () => (s.haptics <= 0 ? 'Off' : s.haptics < 1 ? 'Low' : 'Full'),
+        change: (d) => {
+          s.haptics = step([0, 0.5, 1], s.haptics, d);
+          save();
+          this.input.hapticScale = s.haptics;
+          this.input.pulse('right', 0.6, 60);
+        },
+      },
+      {
+        label: 'Graphics',
+        value: () => (s.quality === 'auto' ? `Auto (${resolveQuality('auto')})` : s.quality === 'high' ? 'High' : 'Low'),
+        hint: () => (this.isXR ? 'Low suits Quest 1 / 2 · sharpness changes next time you enter VR' : 'Low suits Quest 1 / 2'),
+        change: (d) => {
+          s.quality = step(qualities, s.quality, d);
+          save();
+          this.onGraphics(resolveQuality(s.quality));
+        },
+      },
+      {
+        label: 'Re-center arena',
+        hint: () => 'Face forward first',
+        act: () => {
+          const f = this.input.frame;
+          this.space.calibrate(f.headPos, f.headQuat);
+          this.closeMenu();
+        },
+      },
+      {
+        label: 'New run',
+        hint: () => 'Back to weapon and relic choice',
+        act: () => {
+          this.closeMenu();
+          if (this.phase !== 'calibrate') this.startRun(this.lastT);
+        },
+      },
+    ];
   }
 
   /** Any TimingConfig number can be overridden from the URL, e.g. ?perfectEarlyMs=150&iframesMs=400 */
@@ -711,7 +843,7 @@ export class Game {
       if (ab.length) ctx.fillText(ab.join('   '), 32, 625);
       ctx.fillStyle = '#7c8594';
       ctx.font = '22px system-ui, sans-serif';
-      ctx.fillText(this.isXR ? 'A: hide panel · B: recalibrate · Y: switch timing preset' : 'H: hide panel · R: recalibrate · P: switch timing preset', 32, 680);
+      ctx.fillText(this.isXR ? 'A: hide panel · B: re-center · Y: menu & settings' : 'H: hide panel · R: re-center · M: menu & settings', 32, 680);
     });
   }
 
@@ -751,7 +883,7 @@ export class Game {
       line(xr ? 'LEFT HAND: squeeze grip on the handle = two hands' : 'G: two-handed grip', '700 32px system-ui, sans-serif', '#ffd060', 38);
       line('Steadier blocks, harder hits, slower. One hand: quick + pokes.', '500 27px system-ui, sans-serif', '#d8dce4', 50);
       line(
-        xr ? 'Buttons: R trigger start · X ward · A stats · B re-center · Y difficulty' : 'Keys: G two hands · E ward · H stats · R re-center · P difficulty',
+        xr ? 'Y = MENU: settings + every button · X ward · B re-center' : 'M = MENU: settings + every key · E ward · R re-center',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,
@@ -834,10 +966,10 @@ export class Game {
     const att = d.currentAttack;
     const e = d.enemy;
     const t = this.lastT;
-    const teach = this.calloutsAlways || this.run.fight === 0;
+    const teach = this.settings.callouts || this.run.fight === 0;
     // Must-dodge attacks are always named: they arrive after the Trainer and can't be blocked.
     const swing = this.phase === 'fight' && !!att && (teach || att.perilous !== 'none') && e.state === 'attack' && !e.struck;
-    const result = !swing && this.showResults && t - this.lastResult.t < 1100;
+    const result = !swing && this.settings.results && t - this.lastResult.t < 1100;
     const k = swing ? `${att!.id}@${e.attackStart}` : result ? `r${this.lastResult.t}` : '';
     this.callout.mesh.visible = swing || result;
     if (!this.callout.mesh.visible || k === this.calloutKey) return;
