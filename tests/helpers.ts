@@ -95,6 +95,8 @@ export function drive(
     /** Out of his reach over time. */
     farAt?: (t: number) => boolean;
     grappleAt?: Array<[number, 'hit' | 'miss']>;
+    healAt?: number[];
+    fatalAt?: number[];
   } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
@@ -108,6 +110,8 @@ export function drive(
   const abilities = [...(extra.abilityAt ?? [])];
   const dashes = [...(extra.dashAt ?? [])];
   const grapples = [...(extra.grappleAt ?? [])];
+  const heals = [...(extra.healAt ?? [])];
+  const fatals = [...(extra.fatalAt ?? [])];
   while (t < tEnd - 1e-9) {
     const t1 = t + dt;
     const cur = clone(poseAt(t1));
@@ -123,6 +127,8 @@ export function drive(
     if (dashes.length && dashes[0][0] <= t1) dash = dashes.shift()![1];
     let grapple: 'hit' | 'miss' | null = null;
     if (grapples.length && grapples[0][0] <= t1) grapple = grapples.shift()![1];
+    const heal = !!heals.length && heals[0] <= t1 && !!heals.shift();
+    const fatal = !!fatals.length && fatals[0] <= t1 && !!fatals.shift();
     duel.step({
       t0: t,
       t1,
@@ -139,6 +145,8 @@ export function drive(
       blockHeld: extra.heldAt?.(t1),
       outOfReach: extra.farAt?.(t1),
       grapple,
+      heal,
+      fatal,
     });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;

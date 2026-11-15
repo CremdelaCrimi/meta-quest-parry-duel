@@ -5,6 +5,7 @@ import { Game } from './game';
 import { GRAPHICS, loadSettings, resolveQuality } from './settings';
 import { DuelSpace } from './render/duelSpace';
 import { SwordView } from './render/views';
+import { LeftHandView } from './render/leftHand';
 import { DesktopInput, XRInput } from './xr/input';
 
 // ---------------------------------------------------------------- renderer
@@ -35,20 +36,24 @@ const sun = new THREE.DirectionalLight(0xfff0dd, 1.6);
 sun.position.set(2, 5, 1);
 scene.add(sun);
 
+// The arena lives in its own group: a sideways dash orbits you around the enemy by turning the
+// arena around him, so he stays dead centre in your view while the world swings past.
+const arena = new THREE.Group();
+scene.add(arena);
 const floor = new THREE.Mesh(new THREE.CircleGeometry(7, 48), new THREE.MeshLambertMaterial({ color: 0x2a2d33 }));
 floor.rotation.x = -Math.PI / 2;
-scene.add(floor);
+arena.add(floor);
 const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 2.7, 64), new THREE.MeshBasicMaterial({ color: 0x5a1c1c }));
 ring.rotation.x = -Math.PI / 2;
 ring.position.y = 0.002;
-scene.add(ring);
+arena.add(ring);
 const pillarGeo = new THREE.BoxGeometry(0.5, 4, 0.5);
 const pillarMat = new THREE.MeshLambertMaterial({ color: 0x3b3f48 });
 for (let i = 0; i < 10; i++) {
   const a = (i / 10) * Math.PI * 2;
   const p = new THREE.Mesh(pillarGeo, pillarMat);
   p.position.set(Math.cos(a) * 6, 2, Math.sin(a) * 6);
-  scene.add(p);
+  arena.add(p);
 }
 
 // ---------------------------------------------------------------- game
@@ -59,9 +64,12 @@ scene.add(sword.root);
 
 const targetHz = () => renderer.xr.getSession()?.frameRate ?? 60;
 const space = new DuelSpace();
-const xrInput = new XRInput(renderer, scene, sword);
+const leftHand = new LeftHandView();
+const xrInput = new XRInput(renderer, scene, sword, leftHand);
 const desktopInput = new DesktopInput(renderer.domElement, camera, space, sword);
 const game = new Game(scene, desktopInput, sfx, sword, targetHz, space);
+game.arena = arena;
+game.leftHand = leftHand;
 
 renderer.domElement.addEventListener('pointerdown', () => sfx.init());
 

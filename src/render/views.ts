@@ -135,11 +135,20 @@ export class SwordView {
 
   /** Block button held: the blade glows a steady blue so you always know your guard is up. */
   guarding = false;
+  /** Fatal Art armed: the blade burns red until the heavy strike lands. */
+  fatal = false;
+  private fatalT = 0;
 
   update(dtMs: number): void {
     if (this.flashT > 0) {
       this.flashT = Math.max(0, this.flashT - dtMs / 180);
       this.bladeMat.emissiveIntensity = this.flashT * 2;
+      return;
+    }
+    this.fatalT += dtMs;
+    if (this.fatal) {
+      this.bladeMat.emissive.setHex(0xff2a10);
+      this.bladeMat.emissiveIntensity = 1.2 + 0.5 * Math.sin(this.fatalT / 70);
       return;
     }
     this.bladeMat.emissive.setHex(0x3a8cff);
@@ -621,6 +630,7 @@ export class EnemyView {
     DuelSpace.toLocal({ x: this.footX + this.openX, y: -space.height + 1.2, z: Dz - 0.23 }, this.openMark.position);
   }
 
+  private staggerT = 0;
   /** Footwork: his position relative to the canonical spot (ENEMY_DIST straight ahead), in duel metres. */
   footX = 0;
   footZ = 0;
@@ -661,8 +671,11 @@ export class EnemyView {
       this.body.rotation.x = -Math.min(1, this.deadT / 600) * 1.3;
       if (this.deadT > 2500) this.root.visible = false;
     } else if (e.state === 'stagger') {
+      // Broken: bent over and swaying, blade hanging low, until he recovers or you finish him.
       copyPose(this.target, STAGGER);
-      this.body.rotation.set(0.25, 0, 0);
+      this.staggerT += animMs;
+      this.body.rotation.set(0.45 + 0.04 * Math.sin(this.staggerT / 260), 0, 0.05 * Math.sin(this.staggerT / 410));
+      this.body.position.y -= 0.12;
     }
     let rate = e.state === 'attack' && !e.struck ? 9 : 6;
     let twist = 0;

@@ -122,6 +122,20 @@ export interface TimingConfig {
 
   enemyStaggerMs: number;
   iframesMs: number;
+  /** I-frames of a dash (left stick). The dash moves you over exactly this long, so movement and
+   *  invincibility stay in sync. Lean/duck dodges use iframesMs. */
+  dashIframesMs: number;
+  /** Healing flask: HP per drink and drinks per fight. */
+  healAmount: number;
+  flasksPerFight: number;
+  /** Fatal Art meter (0-100): gained per perfect parry, per perfect dodge, and per strike he deflects. */
+  fatalPerPerfect: number;
+  fatalPerPerfectDodge: number;
+  fatalPerDeflect: number;
+  /** Fatal Art: how long it stays armed, and the armed strike's damage multiplier and posture. */
+  fatalArmMs: number;
+  fatalDamageMult: number;
+  fatalPosture: number;
   /** A dodge started within this long before the strike is a perfect dodge (counter + posture). */
   perfectDodgeMs: number;
   /** Posture a perfect dodge deals to him (half against a normal swing). */
@@ -204,6 +218,10 @@ export interface FrameInput {
   outOfReach?: boolean;
   /** Grapple fired this frame: did the wire hit him? */
   grapple?: 'hit' | 'miss' | null;
+  /** A drink from the flask finished this frame. */
+  heal?: boolean;
+  /** Fatal Art button pressed this frame (left X). */
+  fatal?: boolean;
   /**
    * Block button held at t1 (right grip). A guard only counts while it's held, so pressing it with
    * the sword already in place is a guard entry at that moment. Omitted = always held (no button).
@@ -232,7 +250,9 @@ export type DuelEventType =
   | 'practiceReset'
   /** His strike landed while you were out of his reach. */
   | 'whiff'
-  | 'grapple';
+  | 'grapple'
+  | 'heal'
+  | 'fatalArmed';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
@@ -268,6 +288,8 @@ export interface DuelEvent {
   perfect?: boolean;
   /** On hit: you dodged, but this long before the strike (ms), or with the wrong kind of dodge. */
   dodgeEarlyMs?: number;
+  /** On enemyHit / finisher: a Fatal Art. */
+  heavy?: boolean;
   /** On grapple: what it did. */
   grapple?: 'guardBreak' | 'pull' | 'backfire' | 'miss';
 }

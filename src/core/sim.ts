@@ -77,6 +77,11 @@ export class Duel {
     hitStopUntil: -Infinity,
     abilityReadyAt: { slowTime: 0, ward: 0 } as Record<AbilityId, number>,
     grappleReadyAt: 0,
+    flasks: 0,
+    /** Fatal Art meter, 0-100. */
+    fatalMeter: 0,
+    /** Real time until which the next strike is a Fatal Art. */
+    fatalArmedUntil: -Infinity,
     dead: false,
     /** Perfect parries in a row (reset by a block or a hit). */
     chain: 0,
@@ -156,6 +161,7 @@ export class Duel {
     const p = this.player;
     p.hpMax = this.cfg.playerHp + this.mods.maxHpBonus;
     p.hp = Math.min(p.hpMax, o.playerHp ?? p.hpMax);
+    p.flasks = this.cfg.flasksPerFight;
 
     const e = this.enemy;
     e.def = o.enemy;
@@ -248,6 +254,8 @@ export class Duel {
     if (inp.ability) this.useAbility(inp.ability, inp.t0);
     if (inp.dash) this.onDodge({ kind: DASH_KIND[inp.dash], t: inp.t0 });
     if (inp.grapple) this.onGrapple(inp.grapple, inp.t0);
+    if (inp.heal) this.drink(inp.t0);
+    if (inp.fatal) this.onFatal(inp.t0);
     this.outOfReach = !!inp.outOfReach;
 
     const span = inp.t1 - inp.t0;
@@ -381,6 +389,7 @@ export class Duel {
         p.slowUntil = Math.max(p.slowUntil, S + 300);
         e.posture += this.cfg.perfectDodgePosture * (att.perilous !== 'none' ? 1 : 0.5);
         e.postureHitAt = S;
+        this.gainFatal(this.cfg.fatalPerPerfectDodge);
       }
       this.emit({ type: 'dodged', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous, dodge: p.dodgeKind ?? undefined, perfect });
       if (perfect && this.enemy.posture >= this.enemy.def.postureMax) this.breakEnemy(S);
@@ -446,6 +455,7 @@ export class Duel {
     p.hitStopFrom = t;
     p.hitStopUntil = t + stop;
     p.counterUntil = t + stop + c.counterWindowMs;
+    this.gainFatal(c.fatalPerPerfect);
     this.emit({ type: 'perfect', t, offsetMs: offset, attackId: att.id, dir: att.dir, chain: p.chain });
     if (breaks) this.breakEnemy(t);
   }
@@ -519,7 +529,8 @@ export class Duel {
     if (d.t < p.dodgeAt + this.cfg.dodgeCooldownMs) return;
     p.dodgeAt = d.t;
     p.dodgeKind = d.kind;
-    p.iframesUntil = d.t + this.cfg.iframesMs + this.mods.iframesBonusMs;
+    const base = d.kind.startsWith('dash') ? this.cfg.dashIframesMs : this.cfg.iframesMs;
+    p.iframesUntil = d.t + base + this.mods.iframesBonusMs;
     this.emit({ type: 'dodge', t: d.t, dodge: d.kind });
   }
 
@@ -550,6 +561,39 @@ export class Duel {
     }
     this.emit({ type: 'grapple', t, grapple: what });
     if (e.posture >= e.def.postureMax && e.state !== 'stagger') this.breakEnemy(t);
+  }
+
+  private gainFatal(n: number): void {
+    this.player.fatalMeter = Math.min(100, this.player.fatalMeter + n);
+  }
+
+  /** A full drink from the flask (the game decides when the drinking gesture completes). */
+  private drink(t: number): void {
+    const p = this.player;
+    if (p.flasks <= 0 && !this.practice) return;
+    if (!this.practice) p.flasks--;
+    p.hp = Math.min(p.hpMax, p.hp + this.cfg.healAmount);
+    this.emit({ type: 'heal', t, damage: this.cfg.healAmount });
+  }
+
+  /**
+   * Fatal Art (left X): on a broken enemy it's the finisher at once; otherwise, with a full meter,
+   * it arms your next strike as a heavy hit for fatalArmMs.
+   */
+  private onFatal(t: number): void {
+    const p = this.player;
+    const e = this.enemy;
+    if (e.state === 'stagger') {
+      e.hp -= this.cfg.finisherDamage;
+      this.emit({ type: 'finisher', t, damage: this.cfg.finisherDamage, heavy: true });
+      e.posture = 0;
+      if (!this.checkEnemyDead(t)) this.toIdle(e.clock, 600);
+      return;
+    }
+    if (p.fatalMeter < 100 || e.state === 'dead') return;
+    p.fatalMeter = 0;
+    p.fatalArmedUntil = t + this.cfg.fatalArmMs;
+    this.emit({ type: 'fatalArmed', t });
   }
 
   private useAbility(id: AbilityId, t: number): void {
@@ -607,7 +651,17 @@ export class Duel {
       if (!this.checkEnemyDead(t)) this.toIdle(e.clock, 600);
       return;
     }
-    if (t <= p.counterUntil) {
+    if (t <= p.fatalArmedUntil) {
+      // Fatal Art: a heavy strike that goes through his guard and freezes him for a beat.
+      const d = dmg * c.fatalDamageMult;
+      e.hp -= d;
+      e.posture += c.fatalPosture;
+      e.postureHitAt = t;
+      p.fatalArmedUntil = -Infinity;
+      p.hitStopFrom = t;
+      p.hitStopUntil = t + 150;
+      this.emit({ type: 'enemyHit', t, damage: d, zone, poke, heavy: true });
+    } else if (t <= p.counterUntil) {
       const d = dmg * 1.5 * this.mods.counterDamageMult;
       e.hp -= d;
       e.posture += 10;
@@ -629,6 +683,7 @@ export class Duel {
       // Deflected. A poke into the guard still leans on his posture.
       e.posture += c.playerPostureDamageOnBlocked * (poke ? (this.twoHanded ? c.twoHandPokeMult : c.pokePostureMult) : 1);
       e.postureHitAt = t;
+      this.gainFatal(c.fatalPerDeflect);
       this.emit({ type: 'enemyBlock', t, zone, poke });
     }
     if (!this.checkEnemyDead(t) && e.posture >= e.def.postureMax) this.breakEnemy(t);

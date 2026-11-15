@@ -6,7 +6,7 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  Shift / right mouse hold to block, A/D lean, S duck, arrows dash, F grapple, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
+  Shift / right mouse hold to block, A/D lean, S duck, arrows dash, F grapple, hold V drink, X Fatal Art, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
   M / Esc menu, R recalibrate.
 - **Older headsets (Quest 1 / Quest 2):** same link, same controls. The game spots the headset and
   switches to a lighter graphics mode by itself (see *Menu and settings*).
@@ -58,10 +58,16 @@ his lunge: be further than that when his blade lands and he misses ("OUT OF HIS 
 the coach shows the live distance and both reaches.
 
 ## Dash and perfect dodge
-Flick the **left stick** (desktop: arrow keys) to dash: left/right 0.55 m, toward him 0.5 m, away
-0.6 m, at most one every 400 ms. In VR you really move (an offset reference space slides you over
-140 ms); he stays where he is, so a forward dash puts you in striking range. Every dash or lean/duck
-has 320 ms of i-frames from the moment it starts:
+Flick the **left stick** (desktop: arrow keys) to dash 0.8 m, at most one every 450 ms.
+- **Sideways dashes orbit him:** you circle around him by that arc and he stays dead centre in your
+  view; the arena turns around him while you watch the world swing past (no head turning needed).
+- **Forward / back** slide you toward or away from him (an offset reference space in VR).
+- **Frame data:** a dash moves for exactly as long as its i-frames, so movement and invincibility stay
+  in sync: **300 ms** by default (`dashIframesMs`). Lies of P has no published dodge frame data (only
+  community reports, e.g. that it feels short), so 300 ms is our estimate of a Lies of P-style step.
+  Change it, the distance and the cooldown in menu → **Tuning**; the dash speed is shown there.
+
+Lean / duck dodges have 320 ms of i-frames (`iframesMs`). Which dodge beats what:
 
 | | Normal swing | Red thrust | Red sweep |
 |---|---|---|---|
@@ -75,6 +81,31 @@ An earlier dodge inside the i-frames is only safe ("DODGED · early, no counter"
 **chime 400 ms before they land**: dodge after it. A hit says why: "dodged 480 ms early (i-frames last
 320)", "wrong dodge (thrust: dodge SIDEWAYS)", or what you should have done. The training timeline's
 dodge lane shows too early / safe / PERFECT / too late.
+
+## Flask (left grip, away from the sword)
+Squeeze the **left grip with your hand away from the sword handle** and a gourd appears in your left
+hand. Raise it to your mouth, tipped toward you, and hold it there for **1 s** to drink: +35 HP, 3 drinks
+per fight (unlimited in training). You **can't attack while holding it**, a hit interrupts the drink,
+and you lower it before drinking again. The wrist panel shows the drink filling. Desktop: hold V.
+
+## Fatal Art (X)
+Perfect parries (+25), perfect dodges (+25) and strikes he deflects (+5) fill the Fatal Art meter.
+At 100% press **X** (desktop: X): your blade burns red and your next strike within 2.5 s is a heavy hit,
+×4 damage and 40 posture, straight through his guard, with a short freeze. When his posture is broken,
+**X is the finisher at once**, no swing needed. While broken he's bent over and swaying, blade hanging.
+
+## HUD
+- **Status strip** (low in your view, follows lazily): your HP and posture, plus one tile per ability
+  (grapple, flask, Fatal Art, ward) that fills as it recovers and shows the seconds left.
+- **Wrist** (look at your left wrist, like a watch): the same abilities, bigger, with the drink progress.
+- **Lock-on reticle** on his chest: white normally, red and pulsing during a red attack, gold when he's
+  open (counter, broken, Fatal Art armed). Menu → Lock-on marker turns it off.
+- Above him: his HP, posture, chain and frenzy. Floor arc: your reach (green = in range).
+
+## Tuning (menu → Tuning)
+Every row steps a number and saves it at once (`parryDuel.settings`): dash i-frames (= dash time),
+distance, cooldown, perfect dodge window, lean/duck i-frames, perfect parry early/late, parry freeze,
+grapple cooldown, drink time, heal per drink, Fatal Art armed time, and Reset all to defaults.
 
 ## Grapple (left trigger)
 Point your left hand at him and pull the **left trigger** (desktop: F). A wire (3.5 m range) pulls you
@@ -118,12 +149,14 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Left stick flick | **Dash** left / right / toward / away (see *Dash*) |
 | Right stick flick ←→ | Switch the training dummy |
 | Left grip, hand on the handle | **Two-handed grip** (see below) |
-| X | Ward: absorb the next hit (every run starts with it) |
+| Left grip, hand away from the sword | **Flask**: raise the gourd to your mouth to drink |
+| X | **Fatal Art** (meter full) / finisher (he's broken) |
+| B | Ward: absorb the next hit (every run starts with it); Back in menus |
 | Left trigger | **Grapple**: pulls you in, tears an idle guard open |
 | Left stick press | Time Sigil (once picked up) |
 | Right trigger | Start / confirm / pick a card |
 | **Y** or left stick press | **Menu**: pause, settings, button map |
-| A / B | Stats panel / re-center |
+| A | Stats panel (re-center is in the menu) |
 
 Three swing shapes, each named above the enemy as it winds up:
 **vertical** (chop down: sword flat above your head), **horizontal** (level sweep from one side:

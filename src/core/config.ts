@@ -37,6 +37,17 @@ const BASE: Omit<TimingConfig, 'name'> = {
   enemyStaggerMs: 2500, // time to step in for the finisher in VR
   iframesMs: 320,
   perfectDodgeMs: 150,
+  // No published Lies of P dodge frame data (community reports only); 300 ms is our estimate of a
+  // Lies of P-style step. Tune in the menu (Tuning) or with ?dashIframesMs=.
+  dashIframesMs: 300,
+  healAmount: 35,
+  flasksPerFight: 3,
+  fatalPerPerfect: 25,
+  fatalPerPerfectDodge: 25,
+  fatalPerDeflect: 5,
+  fatalArmMs: 2500,
+  fatalDamageMult: 4,
+  fatalPosture: 40,
   perfectDodgePosture: 30,
   grappleCooldownMs: 3000,
   grapplePlayerPosture: 20,

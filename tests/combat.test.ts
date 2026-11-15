@@ -425,6 +425,56 @@ describe('reach and grapple', () => {
   });
 });
 
+describe('flask and Fatal Art', () => {
+  it('a drink heals and uses a flask', () => {
+    const d = makeDuel();
+    d.player.hp = 40;
+    const n = d.player.flasks;
+    const evs = drive(d, () => POSES.neutral, 400, 90, { healAt: [200] });
+    expect(evs.some((e) => e.type === 'heal')).toBe(true);
+    expect(d.player.hp).toBe(40 + PRESET_SEKIRO_LIKE.healAmount);
+    expect(d.player.flasks).toBe(n - 1);
+  });
+
+  it('no flasks left, no heal', () => {
+    const d = makeDuel();
+    d.player.hp = 40;
+    d.player.flasks = 0;
+    drive(d, () => POSES.neutral, 400, 90, { healAt: [200] });
+    expect(d.player.hp).toBe(40);
+  });
+
+  it('perfects fill the meter; a full meter arms a heavy strike through his guard', () => {
+    const d = makeDuel();
+    expect(drive(d, () => POSES.neutral, 300, 90, { fatalAt: [200] }).some((e) => e.type === 'fatalArmed')).toBe(false);
+    d.player.fatalMeter = 100;
+    const side = d.enemy.guardSide;
+    const hp = d.enemy.hp;
+    const evs = drive(d, () => POSES.neutral, 800, 90, { fatalAt: [400], strikeAt: [600], zone: side });
+    expect(evs.some((e) => e.type === 'fatalArmed')).toBe(true);
+    const hit = evs.find((e) => e.type === 'enemyHit')!;
+    expect(hit.heavy).toBe(true);
+    expect(hp - d.enemy.hp).toBeCloseTo(PRESET_SEKIRO_LIKE.playerDamage * PRESET_SEKIRO_LIKE.fatalDamageMult, 5);
+    expect(d.player.fatalMeter).toBe(0);
+  });
+
+  it('Fatal Art on a broken enemy is the finisher', () => {
+    const d = makeDuel();
+    d.enemy.posture = d.enemy.def.postureMax;
+    d.player.fatalMeter = 100;
+    drive(d, () => POSES.neutral, 300, 90, { strikeAt: [100], zone: d.enemy.guardSide }); // a poke breaks him
+    expect(d.enemy.state).toBe('stagger');
+    const evs = drive(d, () => POSES.neutral, d.time + 200, 90, { fatalAt: [d.time + 50] });
+    expect(evs.some((e) => e.type === 'finisher' && e.heavy)).toBe(true);
+  });
+
+  it('a dash uses the dash i-frames', () => {
+    const d = makeDuel({ timing: { ...PRESET_SEKIRO_LIKE, dashIframesMs: 500 } });
+    script(d, L, START);
+    expect(outcome(drive(d, () => POSES.neutral, 2200, 90, { dashAt: [[S - 450, 'left']] }))?.type).toBe('dodged');
+  });
+});
+
 describe('training dummy', () => {
   it('without a guard every idle strike lands', () => {
     const d = makeDuel({ guards: false });

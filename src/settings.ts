@@ -17,16 +17,21 @@ export interface Settings {
   blockButton: boolean;
   /** Floor arc showing how far your blade reaches; green when he's in range. */
   reachMarker: boolean;
+  /** Lock-on reticle on his chest. */
+  lockOn: boolean;
+  /** Tuning editor overrides (menu → Tuning): timing fields and game-side values, by name. */
+  tuning: Record<string, number>;
 }
 
 const KEY = 'parryDuel.settings';
 
-export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true };
+export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true, lockOn: true, tuning: {} };
 
 export function loadSettings(): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };
   try {
     Object.assign(s, JSON.parse(localStorage.getItem(KEY) ?? '{}'));
+    s.tuning = { ...(s.tuning ?? {}) };
   } catch {
     /* private window or bad JSON: defaults */
   }

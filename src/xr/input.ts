@@ -3,6 +3,7 @@ import type { DashDir, V3 } from '../core/types';
 import type { DuelSpace } from '../render/duelSpace';
 import { LEFT_GRIP_SPOT_M } from '../render/views';
 import type { SwordView } from '../render/views';
+import type { LeftHandView } from '../render/leftHand';
 
 // Two-handed grip: squeeze the left grip with that hand on the handle, LEFT_GRIP_SPOT_M behind the right.
 /** Left hand within this distance (m) of the grip spot, grip held, for ENGAGE_HOLD_MS, takes the grip. */
@@ -54,6 +55,15 @@ export interface InputFrame {
   /** Left hand position and pointing direction (world), for aiming the grapple. */
   leftPos: THREE.Vector3;
   leftDir: THREE.Vector3;
+  /** Left grip squeeze 0..1 (drives the hand model). */
+  leftSqueeze: number;
+  /** Holding the healing gourd: left grip squeezed with the hand away from the sword handle. */
+  flaskHeld: boolean;
+  /** Gourd at your mouth, tipped toward you: drinking. */
+  drinking: boolean;
+  /** Ward (B; desktop E) and Fatal Art (X; desktop X), edge-triggered. */
+  ward: boolean;
+  fatal: boolean;
   /** Desktop: a pickup card chosen by number key / click (0-2), else -1. */
   choose: number;
 }
@@ -65,11 +75,11 @@ export interface InputDevice {
   /** Rumble strength multiplier from the menu (0 = off). */
   hapticScale: number;
   /** Move the player: `world` is the step in world space, `duel` the same step in duel coordinates. */
-  move(world: THREE.Vector3, duel: V3): void;
+  move(world: THREE.Vector3, duel: V3, ms: number): void;
 }
 
-/** How long a dash takes (ms). Short enough to read as a step, long enough not to feel like a teleport. */
-const DASH_MS = 140;
+/** The gourd counts as at your mouth within this distance (m) of it, tipped toward you. */
+const MOUTH_M = 0.25;
 /** A dash never takes you further than this from where you started (m), so you stay in the arena. */
 const MAX_TRAVEL_M = 2.5;
 
@@ -102,6 +112,11 @@ function emptyFrame(): InputFrame {
     sigil: false,
     leftPos: new THREE.Vector3(),
     leftDir: new THREE.Vector3(0, 0, -1),
+    leftSqueeze: 0,
+    flaskHeld: false,
+    drinking: false,
+    ward: false,
+    fatal: false,
     choose: -1,
   };
 }
@@ -123,6 +138,7 @@ export class XRInput implements InputDevice {
   private readonly moveFrom = new THREE.Vector3();
   private readonly moveTo = new THREE.Vector3();
   private moveT0 = -1;
+  private moveMs = 300;
   private readonly grips: THREE.Group[] = [];
   private rightGrip: THREE.Group | null = null;
   private leftGripObj: THREE.Group | null = null;
@@ -147,6 +163,7 @@ export class XRInput implements InputDevice {
     private readonly renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
     private readonly sword: SwordView,
+    private readonly leftHand?: LeftHandView,
   ) {
     for (let i = 0; i < 2; i++) {
       const grip = renderer.xr.getControllerGrip(i);
@@ -159,10 +176,14 @@ export class XRInput implements InputDevice {
           this.sword.attachToGrip();
         } else if (e.data?.handedness === 'left') {
           this.leftGripObj = grip;
+          if (this.leftHand) grip.add(this.leftHand.root);
         }
       });
       grip.addEventListener('disconnected', () => {
-        if (this.leftGripObj === grip) this.leftGripObj = null;
+        if (this.leftGripObj === grip) {
+          this.leftGripObj = null;
+          if (this.leftHand) grip.remove(this.leftHand.root);
+        }
         if (this.rightGrip === grip) {
           this.rightGrip = null;
           grip.remove(this.sword.root);
@@ -213,6 +234,7 @@ export class XRInput implements InputDevice {
       } else if (src.handedness === 'left') {
         lt = pressed(0);
         lg = pressed(1);
+        f.leftSqueeze = gp.buttons[1]?.value ?? (lg ? 1 : 0);
         x = pressed(4);
         y = pressed(5);
         ls = pressed(3);
@@ -234,7 +256,9 @@ export class XRInput implements InputDevice {
     f.leftGrip = lg && !pv.lg;
     f.btnX = x && !pv.x;
     f.btnA = a && !pv.a;
-    f.btnB = b && !pv.b;
+    f.btnB = b && !pv.b; // in a fight B is Ward (f.ward); in the menu it's Back
+    f.ward = f.btnB;
+    f.fatal = x && !pv.x;
     f.btnY = y && !pv.y;
     f.menu = y && !pv.y;
     f.grapple = lt && !pv.lt;
@@ -244,6 +268,15 @@ export class XRInput implements InputDevice {
       this.leftGripObj.getWorldPosition(f.leftPos);
       this.leftGripObj.getWorldQuaternion(this.rq);
       f.leftDir.set(0, 0, -1).applyQuaternion(this.rq);
+      // Flask: grip squeezed away from the handle (near the handle, the same squeeze is the two-hand grip).
+      const nearHandle = f.hasSword && f.leftPos.distanceTo(this.sword.axisPoint(LEFT_GRIP_SPOT_M, this.spot)) < HINT_M;
+      f.flaskHeld = lg && !f.twoHanded && !nearHandle;
+      const mouth = this.v.copy(f.headPos).add(this.mouthOff.set(0, -0.08, 0));
+      const toMouth = mouth.sub(f.leftPos);
+      const dist = toMouth.length();
+      f.drinking = f.flaskHeld && dist < MOUTH_M && f.leftDir.dot(toMouth.normalize()) > 0.3;
+    } else {
+      f.flaskHeld = f.drinking = false;
     }
     f.select = (rt && !pv.rt) || (a && !pv.a);
     f.blockHeld = rg;
@@ -333,8 +366,11 @@ export class XRInput implements InputDevice {
     }
   }
 
-  /** Dash: slide the player by `world` over DASH_MS (the duel space then re-centres the enemy on you). */
-  move(world: THREE.Vector3): void {
+  private readonly mouthOff = new THREE.Vector3();
+
+  /** Dash or pull: slide the player by `world` over `ms` (a dash moves exactly as long as its i-frames). */
+  move(world: THREE.Vector3, _duel: V3, ms: number): void {
+    this.moveMs = Math.max(60, ms);
     if (!this.baseRef) return;
     this.moveFrom.copy(this.offset);
     this.moveTo.copy(this.offset).add(world);
@@ -349,7 +385,7 @@ export class XRInput implements InputDevice {
    */
   private applyMove(now: number): void {
     if (this.moveT0 < 0 || !this.baseRef) return;
-    const k = Math.min(1, (now - this.moveT0) / DASH_MS);
+    const k = Math.min(1, (now - this.moveT0) / this.moveMs);
     this.offset.lerpVectors(this.moveFrom, this.moveTo, 1 - (1 - k) ** 3); // ease out: fast start
     // Poses in the new space = poses in the base space minus the origin, so moving +d means origin -d.
     const o = this.offset;
@@ -373,7 +409,8 @@ export class XRInput implements InputDevice {
 //   Mouse left/right/up/down of centre -> left/right/high/low guard. Click = strike.
 //   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-6 = pick a card,
 //   R = recalibrate, M / Esc = menu (arrows + Enter inside it), arrows = dash, T = next dummy,
-//   Shift or right mouse button = hold to block, F = grapple, Q = Time Sigil.
+//   Shift or right mouse button = hold to block, F = grapple, Q = Time Sigil, X = Fatal Art,
+//   hold V = drink from the flask.
 
 export class DesktopInput implements InputDevice {
   readonly frame = emptyFrame();
@@ -387,6 +424,7 @@ export class DesktopInput implements InputDevice {
   /** Where you stand in the fixed duel frame (dashes move it; it stays where you put it). */
   private readonly dashTarget = { x: 0, z: 0 };
   private readonly dashCur = { x: 0, z: 0 };
+  private moveRate = 0.2;
   private readonly base = new THREE.Vector3(0, 1.6, 0);
   private readonly v = { x: 0, y: 0, z: 0 };
 
@@ -431,8 +469,8 @@ export class DesktopInput implements InputDevice {
     this.lean.x += (tx - this.lean.x) * 0.35;
     this.lean.y += (ty - this.lean.y) * 0.35;
     const dc = this.dashCur, dtg = this.dashTarget;
-    dc.x += (dtg.x - dc.x) * 0.45;
-    dc.z += (dtg.z - dc.z) * 0.45;
+    dc.x += (dtg.x - dc.x) * this.moveRate;
+    dc.z += (dtg.z - dc.z) * this.moveRate;
     this.v.x = this.lean.x + dc.x;
     this.v.y = this.lean.y;
     this.v.z = dc.z;
@@ -473,7 +511,12 @@ export class DesktopInput implements InputDevice {
     f.grapple = pk.has('f');
     f.leftPos.copy(f.headPos);
     f.leftGrip = false;
-    f.btnX = pk.has('e');
+    f.btnX = false;
+    f.ward = pk.has('e');
+    f.fatal = pk.has('x');
+    f.flaskHeld = this.keys.has('v');
+    f.drinking = f.flaskHeld;
+    f.leftSqueeze = f.flaskHeld ? 1 : 0;
     if (pk.has('g')) f.twoHanded = !f.twoHanded; // desktop stand-in for the left hand on the handle
     this.sword.setGrip(f.twoHanded, 0);
     f.btnA = pk.has('h');
@@ -494,7 +537,8 @@ export class DesktopInput implements InputDevice {
   pulse(): void {}
   hapticScale = 1;
 
-  move(_world: THREE.Vector3, duel: V3): void {
+  move(_world: THREE.Vector3, duel: V3, ms: number): void {
+    this.moveRate = Math.min(0.9, 50 / Math.max(60, ms)); // ~ms to settle at 60 fps
     this.dashTarget.x = Math.max(-2.5, Math.min(2.5, this.dashTarget.x + duel.x));
     this.dashTarget.z = Math.max(-2.5, Math.min(1.2, this.dashTarget.z + duel.z));
   }

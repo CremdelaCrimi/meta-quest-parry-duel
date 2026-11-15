@@ -30,6 +30,9 @@ export class PauseMenu {
   isOpen = false;
   private page: 'main' | 'controls' = 'main';
   private cursor = 0;
+  private title = 'PAUSED';
+  /** Sub-pages (e.g. Tuning): B goes back up one level. */
+  private readonly stack: Array<{ items: MenuItem[]; cursor: number; title: string }> = [];
   private readonly fwd = new THREE.Vector3();
 
   constructor(
@@ -57,6 +60,8 @@ export class PauseMenu {
     m.position.y -= 0.1;
     m.lookAt(head.x, m.position.y, head.z);
     this.page = page;
+    this.stack.length = 0;
+    this.title = 'PAUSED';
     this.isOpen = true;
     m.visible = true;
     this.draw();
@@ -79,7 +84,7 @@ export class PauseMenu {
       return false;
     }
     if (f.btnB) {
-      this.close();
+      if (!this.back()) this.close();
       return true;
     }
     const n = this.items.length;
@@ -101,6 +106,26 @@ export class PauseMenu {
     return changed;
   }
 
+  /** Open a sub-page (a list of rows with its own title). */
+  openSub(title: string, items: MenuItem[]): void {
+    this.stack.push({ items: this.items, cursor: this.cursor, title: this.title });
+    this.items = items;
+    this.cursor = 0;
+    this.title = title;
+    this.draw();
+  }
+
+  /** Up one level; false when already at the top. */
+  back(): boolean {
+    const top = this.stack.pop();
+    if (!top) return false;
+    this.items = top.items;
+    this.cursor = top.cursor;
+    this.title = top.title;
+    this.draw();
+    return true;
+  }
+
   showControls(): void {
     this.page = 'controls';
     this.draw();
@@ -119,7 +144,7 @@ export class PauseMenu {
       ctx.fill();
       ctx.fillStyle = '#ffffff';
       ctx.font = `800 60px ${FONT}`;
-      ctx.fillText('PAUSED', 48, 88);
+      ctx.fillText(this.title, 48, 88);
       ctx.fillStyle = DIM;
       ctx.font = `500 28px ${FONT}`;
       ctx.fillText(this.status(), 48, 132);
@@ -166,7 +191,7 @@ export class PauseMenu {
       ctx.font = `500 26px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.fillText(
-        xr ? 'Stick ↕ choose · Stick ↔ change · Trigger or A select · Y close' : '↑↓ choose · ←→ change · Enter or click select · M / Esc close',
+        xr ? 'Stick ↕ choose · Stick ↔ change · Trigger or A select · B back · Y close' : '↑↓ choose · ←→ change · Enter select · M / Esc close',
         w / 2,
         h - 36,
       );
@@ -191,13 +216,13 @@ export class PauseMenu {
       if (xr) {
         controller(ctx, 260, 330, 'L', [
           ['Y', 'MENU (this screen)', GOLD],
-          ['X', 'Ward: absorb next hit', '#6fb6ff'],
+          ['X', 'FATAL ART (meter full / he is broken)', '#ff5050'],
           ['Stick', 'Flick: DASH that way · press: Time Sigil', '#60c0ff'],
           ['Trigger', 'GRAPPLE: point at him, pulls you in', '#d8c08a'],
-          ['Grip', 'Two hands: hand on the handle', '#ffd060'],
+          ['Grip', 'On handle: two hands · away: FLASK', '#ffd060'],
         ]);
         controller(ctx, 260, 700, 'R', [
-          ['B', 'Re-center the arena on you', TEXT],
+          ['B', 'Ward: absorb next hit · menu: back', '#6fb6ff'],
           ['A', 'Stats panel · select in menus', TEXT],
           ['Stick', 'Flick ←→: switch training dummy', TEXT],
           ['Trigger', 'Start · confirm · pick a card', GOLD],
@@ -212,6 +237,7 @@ export class PauseMenu {
           ['Arrows', 'Dash left / right / toward / away'],
           ['T', 'Switch training dummy'],
           ['E', 'Ward: absorb next hit'],
+          ['X / hold V', 'Fatal Art · drink from the flask'],
           ['Q', 'Time Sigil (once picked up)'],
           ['F', 'Grapple: pull yourself in'],
           ['G', 'Two-handed grip'],

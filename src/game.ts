@@ -20,6 +20,8 @@ import { DRILLS, DUMMY_MODES, DUMMY_SPEEDS, dummyDef } from './core/training';
 import type { DummyMode } from './core/training';
 import { TRAIN_COLORS, drawCoach, drawTimeline } from './render/trainingPanels';
 import type { TimelineData } from './render/trainingPanels';
+import { drawChipRow } from './render/leftHand';
+import type { AbilityChip, LeftHandView } from './render/leftHand';
 import type { MenuItem } from './render/pauseMenu';
 import { headsetName, loadSettings, resolveQuality, saveSettings } from './settings';
 import type { Quality } from './settings';
@@ -40,15 +42,20 @@ const MODE_OFFERS: Offer[] = [
   { id: 'run', name: 'Run', desc: 'Four duels in a row, a boon after each win. Death ends the run.' },
 ];
 
-/** Dash distances (m) in duel coordinates: sideways, toward him, away from him. */
-const DASH_STEP: Record<DashDir, V3> = {
-  left: { x: -0.55, y: 0, z: 0 },
-  right: { x: 0.55, y: 0, z: 0 },
-  forward: { x: 0, y: 0, z: 0.5 },
-  back: { x: 0, y: 0, z: -0.6 },
+/**
+ * Game-side tuning defaults (menu → Tuning overrides them; timing values live in TimingConfig).
+ * The dash moves for exactly its i-frames (dashIframesMs), so distance / i-frames = dash speed.
+ */
+const TUNE_DEFAULTS: Record<string, number> = {
+  dashDistM: 0.8,
+  dashCooldownMs: 450,
+  healMs: 1000,
 };
+/** Which tuning keys are TimingConfig fields (the rest are TUNE_DEFAULTS). */
+const TIMING_TUNE_KEYS = ['dashIframesMs', 'iframesMs', 'perfectDodgeMs', 'perfectEarlyMs', 'perfectLateMs', 'hitStopMs', 'grappleCooldownMs', 'healAmount', 'fatalArmMs'];
 /** His blade reaches you while you're within this distance of his body (m, after his lunge). */
 const ENEMY_REACH = 1.75;
+const UP = new THREE.Vector3(0, 1, 0);
 /** Your reach to his body axis: arm forward + blade + his body radius (m). */
 const ARM_M = 0.55;
 const BODY_R = 0.27;
@@ -57,8 +64,6 @@ const GRAPPLE_RANGE_M = 3.5;
 const GRAPPLE_AIM_M = 0.45;
 const GRAPPLE_PULL_M = 0.5;
 const GRAPPLE_STOP_GAP_M = 1.2;
-/** Minimum time between dashes (ms). The sim's dodge cooldown is shorter; this keeps dashes from chaining into a glide. */
-const DASH_COOLDOWN_MS = 400;
 
 function loadLoadout(): Loadout {
   try {
@@ -140,7 +145,7 @@ export class Game {
   private readonly help = new CanvasPanel(1024, 880, 0.8);
   private helpXR = false;
   /** Your HP and posture: a small strip that lazily follows the bottom of your view. */
-  private readonly status = new CanvasPanel(768, 150, 0.3);
+  private readonly status = new CanvasPanel(768, 270, 0.3);
   /** Enemy name, HP, posture, chain and frenzy, floating above his head. */
   private readonly enemyPanel = new CanvasPanel(1024, 200, 0.85);
   /** Names the incoming swing and how to block it (Trainer fight only; ?callouts=1 keeps it on). */
@@ -177,6 +182,31 @@ export class Game {
   private readonly reachMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide });
   private readonly reachArc = new THREE.Mesh(new THREE.BufferGeometry(), this.reachMat);
   private reachR = 0;
+  /** Arena decor group (main.ts): a sideways dash orbits you by turning it around him. */
+  arena: THREE.Group | null = null;
+  leftHand: LeftHandView | null = null;
+  private orbit = { angle: 0, applied: 0, t0: -1, ms: 300, pivot: new THREE.Vector3() };
+  /** Flask: progress of the current drink (ms), and a latch so one raise = one drink. */
+  private drinkMs = 0;
+  private drinkLatch = false;
+  private fatalReadyShown = false;
+  private wristAt = 0;
+  /** Lock-on reticle on his chest. */
+  private readonly lockMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthTest: false, depthWrite: false });
+  private readonly lockOn = (() => {
+    const g = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.07, 32), this.lockMat);
+    g.add(ring);
+    for (let i = 0; i < 4; i++) {
+      const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.012, 0.035), this.lockMat);
+      const a = (i * Math.PI) / 2;
+      tick.position.set(Math.cos(a) * 0.095, Math.sin(a) * 0.095, 0);
+      tick.rotation.z = a + Math.PI / 2;
+      g.add(tick);
+    }
+    g.traverse((o) => (o.renderOrder = 18)); // children: Group.renderOrder doesn't reach them (menu draws at 20)
+    return g;
+  })();
   /** Grapple wire, shown for a moment from the left hand. */
   private readonly wire = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
@@ -245,7 +275,7 @@ export class Game {
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
     this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
-    scene.add(this.wire);
+    scene.add(this.wire, this.lockOn);
     this.wire.visible = false;
     this.wire.frustumCulled = false;
     this.reachArc.renderOrder = 5;
@@ -297,6 +327,7 @@ export class Game {
       else {
         this.pause.setItems(this.menuItems());
         this.pause.open(f.headPos, f.headQuat);
+        this.lockOn.visible = false;
         this.vignette.set(f.headPos, f.headQuat, 0, 0);
       }
       return;
@@ -310,7 +341,7 @@ export class Game {
       return;
     }
 
-    if (f.btnB && this.phase !== 'calibrate') {
+    if (f.btnB && !this.isXR && this.phase !== 'calibrate') {
       this.space.calibrate(f.headPos, f.headQuat);
       this.resetFootwork();
       this.flashResult('Recalibrated', COLORS.info, t);
@@ -355,7 +386,16 @@ export class Game {
         break;
     }
 
+    this.updateOrbit(t);
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
+    this.updateLockOn(f.headPos);
+    if (this.leftHand) {
+      this.leftHand.update(f.leftSqueeze, f.flaskHeld, this.drinkMs / this.tune('healMs'), dt);
+      if (t >= this.wristAt) {
+        this.leftHand.drawWrist(this.abilityChips(), this.drinkMs / this.tune('healMs'));
+        this.wristAt = t + 150;
+      }
+    }
     place(this.enemyPanel.mesh, { x: this.enemyView.footX, y: 0.66, z: ENEMY_DIST + this.enemyView.footZ });
     place(this.callout.mesh, { x: this.enemyView.footX, y: 0.95, z: ENEMY_DIST + this.enemyView.footZ - 0.1 });
     if (this.wireT > 0) {
@@ -418,7 +458,8 @@ export class Game {
     let strikeSpeed = 0;
     let strikeZone: StrikeZone = 'center';
     let strikePoke = false;
-    if (f.hasSword && t >= this.strikeReadyAt && this.duel.enemy.state !== 'dead') {
+    // Holding the flask: no attacking (that's the price of healing).
+    if (f.hasSword && t >= this.strikeReadyAt && this.duel.enemy.state !== 'dead' && !f.flaskHeld) {
       const speed = this.prevTip.distanceTo(f.tip) / Math.max(1e-3, dt / 1000);
       const contact = this.enemyView.bodyHit(f.hilt, f.tip, this.space) || this.enemyView.bodyHit(this.prevTip, f.tip, this.space);
       if (contact && (speed > STRIKE_MIN_SPEED || (!this.isXR && f.rightTrigger))) {
@@ -434,7 +475,7 @@ export class Game {
         if (short < 0.6 && this.swordCurr.tip.z > 0.3) this.whiff(short, t);
       }
     }
-    if (!this.isXR && f.rightTrigger && this.phase === 'fight' && t >= this.strikeReadyAt) {
+    if (!this.isXR && f.rightTrigger && this.phase === 'fight' && t >= this.strikeReadyAt && !f.flaskHeld) {
       // Desktop: click = strike on the side the mouse holds the sword, if he's within your reach.
       const short = this.gapNow - this.reachR;
       if (short > 0) this.whiff(short, t);
@@ -449,10 +490,19 @@ export class Game {
     let dash: DashDir | null = null;
     if (f.dash && this.phase === 'fight' && t >= this.dashReadyAt) {
       dash = f.dash;
-      this.dashReadyAt = t + DASH_COOLDOWN_MS;
-      const step = DASH_STEP[dash];
-      DuelSpace.toLocal(step, this.tmp).applyQuaternion(this.space.group.quaternion);
-      this.input.move(this.tmp, step);
+      this.dashReadyAt = t + this.tune('dashCooldownMs');
+      const ms = this.timing.dashIframesMs; // movement lasts exactly as long as the i-frames
+      const dist = this.tune('dashDistM');
+      if (dash === 'left' || dash === 'right') {
+        // Orbit: circle around him by that arc. The arena turns around him instead of you moving,
+        // so he stays dead centre while the world swings past.
+        const gap = Math.max(0.7, this.footwork.gap(this.playerZ));
+        this.startOrbit(-(dash === 'right' ? 1 : -1) * (dist / gap), ms);
+      } else {
+        const step = { x: 0, y: 0, z: dash === 'forward' ? Math.min(dist, Math.max(0, this.footwork.gap(this.playerZ) - 0.9)) : -dist };
+        DuelSpace.toLocal(step, this.tmp).applyQuaternion(this.space.group.quaternion);
+        this.input.move(this.tmp, step, ms);
+      }
       this.input.pulse('left', 0.3, 30);
     }
     if (this.training && f.cycle && this.phase === 'fight') {
@@ -484,7 +534,23 @@ export class Game {
 
     let ability: AbilityId | null = null;
     if (f.sigil) ability = 'slowTime';
-    else if (f.btnX) ability = 'ward'; // left grip is for holding the sword with both hands
+    else if (f.ward) ability = 'ward';
+
+    // Flask: hold the gourd at your mouth, tipped toward you, for healMs. Lower it to drink again.
+    let heal = false;
+    const p = this.duel.player;
+    const canDrink = p.flasks > 0 || this.training;
+    if (f.drinking && canDrink && !this.drinkLatch && this.phase === 'fight') {
+      this.drinkMs += dt;
+      if (this.drinkMs >= this.tune('healMs')) {
+        heal = true;
+        this.drinkMs = 0;
+        this.drinkLatch = true;
+      }
+    } else {
+      this.drinkMs = Math.max(0, this.drinkMs - dt * 2);
+      if (!f.drinking) this.drinkLatch = false;
+    }
 
     this.duel.step({
       t0: this.duel.time,
@@ -502,7 +568,19 @@ export class Game {
       blockHeld: held,
       outOfReach: this.gapNow > ENEMY_REACH,
       grapple,
+      heal,
+      fatal: f.fatal && this.phase === 'fight',
     });
+    if (f.fatal && this.phase === 'fight' && p.fatalMeter < 100 && this.duel.enemy.state !== 'stagger') {
+      this.flashResult(`Fatal Art at ${Math.floor(p.fatalMeter)}%: perfect parries and dodges fill it`, COLORS.info, t);
+    }
+    if (p.fatalMeter >= 100 && !this.fatalReadyShown) {
+      this.fatalReadyShown = true;
+      this.sfx.play('chime', 0.6);
+      this.flashResult(this.isXR ? 'FATAL ART READY · press X' : 'FATAL ART READY · press X', COLORS.hit, t);
+    }
+    if (p.fatalMeter < 100) this.fatalReadyShown = false;
+    this.sword.fatal = this.duel.time <= p.fatalArmedUntil;
     // Red attack about to land: a distinct chime 400 ms out (the dodge cue).
     const ra = this.duel.currentAttack;
     const re = this.duel.enemy;
@@ -554,6 +632,8 @@ export class Game {
         break;
       }
       case 'hit': {
+        if (this.drinkMs > 0) this.flashResult('Drink interrupted', COLORS.hit, t);
+        this.drinkMs = 0;
         this.sfx.play('hit');
         this.enemyView.react('hit', this.duel);
         this.hurtT = 1;
@@ -622,6 +702,14 @@ export class Game {
         this.input.pulse('right', 1, 200);
         break;
       case 'enemyHit':
+        if (ev.heavy) {
+          this.sfx.play('finisher');
+          this.input.pulse('right', 1, 160);
+          this.input.pulse('left', 0.7, 160);
+          this.sparks.burst(this.enemyView.hitPoint, 0xff3010, 60, 3.2);
+          this.waves.emit(this.enemyView.hitPoint, 0xff3030, 0.9, 500);
+          this.flashResult(`FATAL ART · ${Math.round(ev.damage ?? 0)} damage`, COLORS.hit, t);
+        }
         if (ev.opening) this.flashResult('OPENING · he covers that side now', COLORS.open, t);
         this.sfx.play('strike');
         this.enemyView.hit();
@@ -649,6 +737,11 @@ export class Game {
         break;
       case 'finisher':
         this.sfx.play('finisher');
+        if (ev.heavy) {
+          this.waves.emit(this.enemyView.hitPoint, 0xffd040, 1.4, 700);
+          this.input.pulse('left', 1, 220);
+          this.flashResult('FATAL ART · FINISHER', COLORS.hit, t);
+        }
         this.input.pulse('right', 1, 220);
         this.sparks.burst(this.enemyView.hitPoint, 0xff2020, 48, 3);
         this.waves.emit(this.enemyView.hitPoint, 0xff3030, 1.1, 600);
@@ -660,6 +753,18 @@ export class Game {
       case 'playerDead':
         this.setPhase('dead', t);
         this.showBanner('DEATH', COLORS.hit, `Reached fight ${this.run.fight + 1}. Trigger for a new run`);
+        break;
+      case 'heal':
+        this.sfx.play('ui');
+        this.waves.emit(this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.3, 0)), 0x60ff9a, 0.6, 500);
+        this.input.pulse('left', 0.5, 120);
+        this.flashResult(`HEALED +${Math.round(ev.damage ?? 0)}`, COLORS.open, t);
+        this.statusAt = 0;
+        break;
+      case 'fatalArmed':
+        this.sfx.play('peril');
+        this.input.pulse('right', 0.8, 80);
+        this.flashResult('FATAL ART · land your next strike!', COLORS.hit, t);
         break;
       case 'practiceReset':
         this.flashResult(ev.who === 'enemy' ? 'Dummy HP refilled' : 'Your HP refilled', COLORS.info, t);
@@ -810,7 +915,105 @@ export class Game {
     if (pull <= 0) return;
     const step = { x: 0, y: 0, z: pull };
     DuelSpace.toLocal(step, this.tmp3).applyQuaternion(this.space.group.quaternion);
-    this.input.move(this.tmp3, step);
+    this.input.move(this.tmp3, step, 200);
+  }
+
+  /** Tuning value: an override from the menu's Tuning page, else the default. */
+  private tune(key: string): number {
+    return this.settings.tuning[key] ?? TUNE_DEFAULTS[key];
+  }
+
+  /** Re-apply Tuning overrides of timing fields (after a preset change). */
+  private applyTuning(): void {
+    const tm = this.timing as unknown as Record<string, number>;
+    for (const k of TIMING_TUNE_KEYS) if (this.settings.tuning[k] !== undefined) tm[k] = this.settings.tuning[k];
+  }
+
+  private startOrbit(angle: number, ms: number): void {
+    if (!this.arena) return;
+    this.finishOrbit();
+    this.enemyView.chestWorld(this.space, this.orbit.pivot);
+    Object.assign(this.orbit, { angle, applied: 0, t0: this.lastT, ms: Math.max(60, ms) });
+  }
+
+  private finishOrbit(): void {
+    if (this.orbit.t0 >= 0) this.turnArena(this.orbit.angle - this.orbit.applied);
+    this.orbit.t0 = -1;
+  }
+
+  /** Ease the arena around him (ease-out, like the forward/back slide). */
+  private updateOrbit(t: number): void {
+    const o = this.orbit;
+    if (o.t0 < 0) return;
+    const k = Math.min(1, Math.max(0, t - o.t0) / o.ms);
+    const target = o.angle * (1 - (1 - k) ** 3);
+    this.turnArena(target - o.applied);
+    o.applied = target;
+    if (k >= 1) o.t0 = -1;
+  }
+
+  private turnArena(d: number): void {
+    const a = this.arena;
+    if (!a || d === 0) return;
+    const pv = this.orbit.pivot;
+    a.position.sub(this.tmp4.set(pv.x, 0, pv.z)).applyAxisAngle(UP, d).add(this.tmp4);
+    a.rotation.y += d;
+  }
+
+  /** Lock-on reticle: on his chest, facing you; red during a red windup, gold when he's open. */
+  private updateLockOn(head: THREE.Vector3): void {
+    const d = this.duel;
+    const show = this.settings.lockOn && this.phase === 'fight' && d.enemy.state !== 'dead';
+    this.lockOn.visible = show;
+    if (!show) return;
+    const c = this.enemyView.chestWorld(this.space, this.tmp3);
+    this.lockOn.position.copy(c).add(this.tmp4.copy(head).sub(c).normalize().multiplyScalar(0.12));
+    this.lockOn.lookAt(head);
+    const att = d.currentAttack;
+    const red = !!att && att.perilous !== 'none' && !d.enemy.struck;
+    const gold = d.enemy.state === 'stagger' || d.time <= d.player.counterUntil || d.time <= d.player.fatalArmedUntil;
+    this.lockMat.color.setHex(red ? 0xff3030 : gold ? 0xffd040 : 0xffffff);
+    this.lockOn.scale.setScalar(red ? 1 + 0.15 * Math.sin(performance.now() / 60) : 1);
+  }
+
+  /** Your abilities: key, readiness 0..1 and a status word, for the wrist and the status strip. */
+  private abilityChips(): AbilityChip[] {
+    const d = this.duel;
+    const p = d.player;
+    const xr = this.isXR;
+    const now = d.time;
+    const cd = (readyAt: number, total: number): [number, string] => {
+      const left = readyAt - now;
+      return left <= 0 ? [1, 'ready'] : [1 - left / total, `${(left / 1000).toFixed(1)} s`];
+    };
+    const g = cd(p.grappleReadyAt, this.timing.grappleCooldownMs);
+    const fatalArmed = now <= p.fatalArmedUntil;
+    const chips: AbilityChip[] = [
+      { key: xr ? 'LT' : 'F', name: 'Grapple', ready: g[0], text: g[1], color: '#d8c08a' },
+      {
+        key: xr ? 'GRIP' : 'V',
+        name: 'Flask',
+        ready: p.flasks > 0 || this.training ? 1 : 0,
+        text: this.training ? '∞' : `×${p.flasks}`,
+        color: '#ff6a6a',
+      },
+      {
+        key: 'X',
+        name: d.enemy.state === 'stagger' ? 'Fatal: FINISH HIM' : 'Fatal Art',
+        ready: fatalArmed || d.enemy.state === 'stagger' ? 1 : p.fatalMeter / 100,
+        text: fatalArmed ? 'ARMED' : p.fatalMeter >= 100 ? 'READY' : `${Math.floor(p.fatalMeter)}%`,
+        color: '#ff5050',
+      },
+    ];
+    if (d.mods.abilities.includes('ward')) {
+      const w = cd(p.abilityReadyAt.ward, 12000);
+      chips.push({ key: xr ? 'B' : 'E', name: p.wardCharges > 0 ? 'Ward: UP' : 'Ward', ready: w[0], text: p.wardCharges > 0 ? 'up' : w[1], color: '#6fb6ff' });
+    }
+    if (d.mods.abilities.includes('slowTime')) {
+      const s = cd(p.abilityReadyAt.slowTime, 18000);
+      chips.push({ key: xr ? 'L3' : 'Q', name: 'Time Sigil', ready: s[0], text: s[1], color: '#b48cff' });
+    }
+    return chips;
   }
 
   private showWire(from: THREE.Vector3, to: THREE.Vector3): void {
@@ -1059,6 +1262,7 @@ export class Game {
     this.presetIdx = i;
     this.settings.presetIdx = i;
     Object.assign(this.timing, PRESETS[i]);
+    this.applyTuning();
     this.applyUrlOverrides();
   }
 
@@ -1110,6 +1314,15 @@ export class Game {
           s.blockButton = !s.blockButton;
           save();
           this.drawHelp();
+        },
+      },
+      { label: 'Tuning', hint: () => 'Dash, dodge, parry, flask numbers (saved)', act: () => this.pause.openSub('TUNING', this.tuningRows()) },
+      {
+        label: 'Lock-on marker',
+        value: () => onOff(s.lockOn),
+        change: () => {
+          s.lockOn = !s.lockOn;
+          save();
         },
       },
       {
@@ -1191,6 +1404,48 @@ export class Game {
           },
     ];
     return rows.filter((r) => !r.hidden);
+  }
+
+  /** The Tuning page: every row steps a number left/right and saves it at once. */
+  private tuningRows(): MenuItem[] {
+    const s = this.settings;
+    const tm = this.timing as unknown as Record<string, number>;
+    const get = (k: string) => (TIMING_TUNE_KEYS.includes(k) ? tm[k] : this.tune(k));
+    const num = (k: string, label: string, step: number, min: number, max: number, unit: string, hint: () => string): MenuItem => ({
+      label,
+      hint,
+      value: () => `${unit === 'm' ? get(k).toFixed(2) : Math.round(get(k))} ${unit}`,
+      change: (d) => {
+        const v = Math.round(Math.min(max, Math.max(min, get(k) + d * step)) * 1000) / 1000;
+        s.tuning[k] = v;
+        if (TIMING_TUNE_KEYS.includes(k)) tm[k] = v;
+        saveSettings(s);
+      },
+    });
+    const speed = () => `dash speed ${(this.tune('dashDistM') / (this.timing.dashIframesMs / 1000)).toFixed(1)} m/s`;
+    return [
+      { label: 'Back', act: () => this.pause.back() },
+      num('dashIframesMs', 'Dash i-frames = dash time', 10, 100, 600, 'ms', () => `The dash moves for exactly this long · ${speed()}`),
+      num('dashDistM', 'Dash distance', 0.05, 0.2, 2.0, 'm', speed),
+      num('dashCooldownMs', 'Dash cooldown', 25, 150, 1500, 'ms', () => 'Minimum time between dashes'),
+      num('perfectDodgeMs', 'Perfect dodge window', 10, 30, 300, 'ms', () => 'Dodge this close to the hit = perfect'),
+      num('iframesMs', 'Lean / duck i-frames', 10, 100, 600, 'ms', () => 'Physical dodges'),
+      num('perfectEarlyMs', 'Perfect parry: early', 5, 40, 300, 'ms', () => 'How early before the hit a guard can be'),
+      num('perfectLateMs', 'Perfect parry: late', 5, 0, 120, 'ms', () => 'How late after the hit'),
+      num('hitStopMs', 'Parry freeze (hit-stop)', 10, 0, 250, 'ms', () => 'Enemy freeze on a perfect; rumble matches'),
+      num('grappleCooldownMs', 'Grapple cooldown', 250, 500, 10000, 'ms', () => 'Left trigger'),
+      num('healMs', 'Drink time', 100, 300, 3000, 'ms', () => 'Gourd held at your mouth this long'),
+      num('healAmount', 'Heal per drink', 5, 5, 100, 'HP', () => 'Flasks per fight: 3'),
+      num('fatalArmMs', 'Fatal Art armed time', 250, 500, 6000, 'ms', () => 'How long X keeps your strike heavy'),
+      {
+        label: 'Reset all to defaults',
+        act: () => {
+          s.tuning = {};
+          saveSettings(s);
+          this.setPreset(this.presetIdx);
+        },
+      },
+    ];
   }
 
   /** Training rows: what the dummy does, which swings, how fast, and your weapon. */
@@ -1457,6 +1712,8 @@ export class Game {
       }
       pill(ctx, 26, 66, w - 52, 30, p.hp / p.hpMax, '#e04848');
       pill(ctx, 26, 108, w - 52, 18, pf, pf > 0.75 ? '#ff5a1a' : '#ffb020');
+      // Abilities under the bars, so cooldowns are visible without looking at your wrist.
+      drawChipRow(ctx, this.abilityChips().slice(0, 4), 18, 150, w - 36, 100);
     });
   }
 
