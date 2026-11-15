@@ -76,6 +76,7 @@ export class Duel {
     hitStopFrom: -Infinity,
     hitStopUntil: -Infinity,
     abilityReadyAt: { slowTime: 0, ward: 0 } as Record<AbilityId, number>,
+    grappleReadyAt: 0,
     dead: false,
     /** Perfect parries in a row (reset by a block or a hit). */
     chain: 0,
@@ -103,6 +104,8 @@ export class Duel {
     guardSide: 'right' as GuardSide,
     /** Enemy-clock time he next moves his idle guard. */
     guardShiftAt: 0,
+    /** Real time until which a grapple has torn his guard open (every strike lands). */
+    guardOpenUntil: -Infinity,
   };
 
   readonly guard: GuardReading = { dir: null, angleErr: 90 };
@@ -121,6 +124,8 @@ export class Duel {
   /** Grip this frame. Guards are judged with the grip held at that instant. */
   twoHanded = false;
   private readonly ai: boolean;
+  /** This frame: is the player beyond his reach (decided by the game's footwork)? */
+  private outOfReach = false;
   /** Does he hold a guard while idle (deflecting strikes on that side)? */
   readonly guards: boolean;
   readonly practice: boolean;
@@ -165,7 +170,7 @@ export class Duel {
   get opening(): GuardSide | 'all' | null {
     const e = this.enemy;
     if (e.state === 'dead') return null;
-    if (e.state !== 'idle' || this.time <= this.player.counterUntil || !this.guards) return 'all';
+    if (e.state !== 'idle' || this.time <= this.player.counterUntil || !this.guards || this.time <= e.guardOpenUntil) return 'all';
     return e.guardSide === 'left' ? 'right' : 'left';
   }
 
@@ -242,6 +247,8 @@ export class Duel {
 
     if (inp.ability) this.useAbility(inp.ability, inp.t0);
     if (inp.dash) this.onDodge({ kind: DASH_KIND[inp.dash], t: inp.t0 });
+    if (inp.grapple) this.onGrapple(inp.grapple, inp.t0);
+    this.outOfReach = !!inp.outOfReach;
 
     const span = inp.t1 - inp.t0;
     for (let k = 1; k <= SUBSTEPS; k++) {
@@ -359,10 +366,24 @@ export class Duel {
 
   private onStrike(att: AttackDef, S: number): void {
     const p = this.player;
+    if (this.outOfReach) {
+      // Footwork: you're further than his blade reaches. Distance is always an answer.
+      this.emit({ type: 'whiff', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous });
+      return;
+    }
     if (S >= p.dodgeAt && S <= p.iframesUntil && dodgeBeats(p.dodgeKind, att)) {
-      // A clean dodge of a must-dodge attack leaves him overextended: same counter window as a perfect.
-      if (att.perilous !== 'none') p.counterUntil = S + this.cfg.counterWindowMs;
-      this.emit({ type: 'dodged', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous, dodge: p.dodgeKind ?? undefined });
+      // A dodge just before the strike is perfect: he's overextended (counter window, posture,
+      // a brief slow). An earlier dodge inside the i-frames is only safe.
+      const perfect = S - p.dodgeAt <= this.cfg.perfectDodgeMs;
+      if (perfect) {
+        const e = this.enemy;
+        p.counterUntil = S + this.cfg.counterWindowMs;
+        p.slowUntil = Math.max(p.slowUntil, S + 300);
+        e.posture += this.cfg.perfectDodgePosture * (att.perilous !== 'none' ? 1 : 0.5);
+        e.postureHitAt = S;
+      }
+      this.emit({ type: 'dodged', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous, dodge: p.dodgeKind ?? undefined, perfect });
+      if (perfect && this.enemy.posture >= this.enemy.def.postureMax) this.breakEnemy(S);
       return;
     }
     if (att.perilous !== 'none') {
@@ -460,7 +481,20 @@ export class Duel {
     p.hp -= att.damage;
     p.chain = 0;
     p.hitStreak++;
-    this.emit({ type: 'hit', t, offsetMs: offset, attackId: att.id, dir: att.dir, perilous: att.perilous, damage: att.damage, faults });
+    // Say why a dodge didn't save you: it started too early (i-frames ran out) or was the wrong kind.
+    const dodged = t - p.dodgeAt < 1000;
+    this.emit({
+      type: 'hit',
+      t,
+      offsetMs: offset,
+      attackId: att.id,
+      dir: att.dir,
+      perilous: att.perilous,
+      damage: att.damage,
+      faults,
+      dodge: dodged ? (p.dodgeKind ?? undefined) : undefined,
+      dodgeEarlyMs: dodged ? t - p.dodgeAt : undefined,
+    });
     this.checkPlayerDead(t);
   }
 
@@ -487,6 +521,35 @@ export class Duel {
     p.dodgeKind = d.kind;
     p.iframesUntil = d.t + this.cfg.iframesMs + this.mods.iframesBonusMs;
     this.emit({ type: 'dodge', t: d.t, dodge: d.kind });
+  }
+
+  /**
+   * Left-hand grapple. On a hit it pulls you in (the game moves you); on an idle enemy it also tears
+   * his guard open. Firing it into a red attack, or missing, locks your perfects (and, in the game,
+   * your strikes) for a moment. Costs your posture either way.
+   */
+  private onGrapple(result: 'hit' | 'miss', t: number): void {
+    const p = this.player;
+    const e = this.enemy;
+    const c = this.cfg;
+    if (t < p.grappleReadyAt || e.state === 'dead') return;
+    p.grappleReadyAt = t + c.grappleCooldownMs;
+    p.posture = Math.min(c.playerPostureMax - 1, p.posture + c.grapplePlayerPosture);
+    p.postureHitAt = t;
+    const att = this.currentAttack;
+    let what: 'guardBreak' | 'pull' | 'backfire' | 'miss';
+    if (result === 'miss') what = 'miss';
+    else if (att && !e.struck && att.perilous !== 'none') what = 'backfire';
+    else if (e.state === 'idle') what = 'guardBreak';
+    else what = 'pull';
+    if (what === 'miss' || what === 'backfire') p.lockoutUntil = Math.max(p.lockoutUntil, t + c.grappleLockMs);
+    if (what === 'guardBreak') {
+      e.guardOpenUntil = t + c.grappleGuardBreakMs;
+      e.posture += c.grapplePostureDamage;
+      e.postureHitAt = t;
+    }
+    this.emit({ type: 'grapple', t, grapple: what });
+    if (e.posture >= e.def.postureMax && e.state !== 'stagger') this.breakEnemy(t);
   }
 
   private useAbility(id: AbilityId, t: number): void {
@@ -554,8 +617,8 @@ export class Duel {
     } else if (e.state === 'attack') {
       e.hp -= dmg;
       this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke });
-    } else if (!this.guards) {
-      e.hp -= dmg; // training dummy with no guard: everything lands
+    } else if (!this.guards || t <= e.guardOpenUntil) {
+      e.hp -= dmg; // no guard (training dummy) or torn open by the grapple: everything lands
       this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
     } else if (zone !== 'center' && zone !== e.guardSide) {
       // Through his opening. He covers that side at once, so the next one has to go elsewhere.

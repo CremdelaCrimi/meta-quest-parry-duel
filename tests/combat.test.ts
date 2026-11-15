@@ -277,10 +277,10 @@ describe('perilous attacks and dodges', () => {
     expect(outcome(drive(d2, () => POSES.neutral, 2500, 90, { headAt: duck(TS - 200) }))?.type).toBe('dodged');
   });
 
-  it('a clean dodge opens a counter window', () => {
+  it('a late lean is a perfect dodge and opens a counter window', () => {
     const d = makeDuel();
     script(d, T, START);
-    drive(d, () => POSES.neutral, TS + 50, 90, { headAt: lean(TS - 200) });
+    drive(d, () => POSES.neutral, TS + 50, 90, { headAt: lean(TS - 140) });
     expect(d.player.counterUntil).toBeGreaterThan(TS);
     expect(d.opening).toBe('all');
   });
@@ -306,13 +306,34 @@ describe('dash', () => {
   const TS = START + T.windupMs;
   const SW = ATTACKS.sweep;
 
-  it('a side dash beats a thrust and opens a counter', () => {
+  it('a late side dash is a perfect dodge of a thrust: counter and posture', () => {
     const d = makeDuel();
     script(d, T, START);
-    const evs = drive(d, () => POSES.neutral, TS + 50, 90, { dashAt: [[TS - 150, 'left']] });
+    const evs = drive(d, () => POSES.neutral, TS + 50, 90, { dashAt: [[TS - 100, 'left']] });
     expect(evs.some((e) => e.type === 'dodge' && e.dodge === 'dashLeft')).toBe(true);
-    expect(outcome(evs)?.type).toBe('dodged');
+    const o = outcome(evs)!;
+    expect(o.type).toBe('dodged');
+    expect(o.perfect).toBe(true);
     expect(d.player.counterUntil).toBeGreaterThan(TS);
+    expect(d.enemy.posture).toBeGreaterThan(20);
+  });
+
+  it('an early dash still dodges, but opens no counter', () => {
+    const d = makeDuel();
+    script(d, T, START);
+    const o = outcome(drive(d, () => POSES.neutral, TS + 50, 90, { dashAt: [[TS - 260, 'left']] }))!;
+    expect(o.type).toBe('dodged');
+    expect(o.perfect).toBe(false);
+    expect(d.player.counterUntil).toBeLessThan(TS);
+  });
+
+  it('a hit after a too-early dodge says how early it was', () => {
+    const d = makeDuel();
+    script(d, T, START);
+    const o = outcome(drive(d, () => POSES.neutral, 2500, 90, { dashAt: [[TS - 500, 'left']] }))!;
+    expect(o.type).toBe('hit');
+    expect(o.dodge).toBe('dashLeft');
+    expect(o.dodgeEarlyMs!).toBeGreaterThan(450);
   });
 
   it('a back dash beats a sweep, a side dash does not', () => {
@@ -371,6 +392,36 @@ describe('block button', () => {
     const d = makeDuel();
     script(d, L, START);
     expect(outcome(drive(d, guardAt(POSES.left, S - 300), 2200, 90, { heldAt: (t) => t < S - 30 }))?.type).toBe('hit');
+  });
+});
+
+describe('reach and grapple', () => {
+  it('a strike while you are out of his reach whiffs', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    const evs = drive(d, () => POSES.neutral, 2200, 90, { farAt: () => true });
+    expect(evs.some((e) => e.type === 'whiff')).toBe(true);
+    expect(outcome(evs)).toBeUndefined();
+    expect(d.player.hp).toBe(PRESET_SEKIRO_LIKE.playerHp);
+  });
+
+  it('a grapple on an idle enemy tears his guard open', () => {
+    const d = makeDuel();
+    const side = d.enemy.guardSide;
+    const evs = drive(d, () => POSES.neutral, 500, 90, { grappleAt: [[300, 'hit']], strikeAt: [400], zone: side });
+    expect(evs.find((e) => e.type === 'grapple')?.grapple).toBe('guardBreak');
+    expect(evs.some((e) => e.type === 'enemyHit')).toBe(true);
+    expect(d.player.posture).toBeGreaterThan(0);
+  });
+
+  it('a grapple into a red attack backfires, and it has a cooldown', () => {
+    const d = makeDuel();
+    script(d, ATTACKS.thrust, START);
+    const evs = drive(d, () => POSES.neutral, START + 400, 90, { grappleAt: [[START + 200, 'hit'], [START + 300, 'hit']] });
+    const g = evs.filter((e) => e.type === 'grapple');
+    expect(g).toHaveLength(1);
+    expect(g[0].grapple).toBe('backfire');
+    expect(d.player.lockoutUntil).toBeGreaterThan(START + 200);
   });
 });
 

@@ -6,12 +6,14 @@ import { DEFAULT_LOADOUT, RELICS, WEAPONS, weaponById } from './core/loadout';
 import type { Loadout, Weapon } from './core/loadout';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
-import { Duel } from './core/sim';
+import { Duel, dodgeBeats } from './core/sim';
+import { Footwork } from './core/footwork';
+import { ATTACKS } from './core/enemies';
 import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
-import { ENEMY_DIST } from './render/duelSpace';
+import { ATTACK_LUNGE, ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
 import { PauseMenu } from './render/pauseMenu';
 import { DRILLS, DUMMY_MODES, DUMMY_SPEEDS, dummyDef } from './core/training';
@@ -45,6 +47,16 @@ const DASH_STEP: Record<DashDir, V3> = {
   forward: { x: 0, y: 0, z: 0.5 },
   back: { x: 0, y: 0, z: -0.6 },
 };
+/** His blade reaches you while you're within this distance of his body (m, after his lunge). */
+const ENEMY_REACH = 1.75;
+/** Your reach to his body axis: arm forward + blade + his body radius (m). */
+const ARM_M = 0.55;
+const BODY_R = 0.27;
+/** Grapple: wire range (m), how close it must pass his body (m), pull distance (m), and how close it stops. */
+const GRAPPLE_RANGE_M = 3.5;
+const GRAPPLE_AIM_M = 0.45;
+const GRAPPLE_PULL_M = 0.5;
+const GRAPPLE_STOP_GAP_M = 1.2;
 /** Minimum time between dashes (ms). The sim's dodge cooldown is shorter; this keeps dashes from chaining into a glide. */
 const DASH_COOLDOWN_MS = 400;
 
@@ -148,9 +160,29 @@ export class Game {
   private readonly coach = new CanvasPanel(1024, 540, 0.7);
   private trainAt = 0;
   private tl: (TimelineData & { realStart: number }) | null = null;
-  private readonly trainStats = { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 };
+  private readonly trainStats = { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0, whiffs: 0 };
   private dashReadyAt = 0;
   private blockWas = false;
+  /** Enemy footwork (fixed duel frame) and the player's position in that frame this frame. */
+  private readonly footwork = new Footwork();
+  private readonly tmpC: V3 = { x: 0, y: 0, z: 0 };
+  private playerX = 0;
+  private playerZ = 0;
+  /** Distance from your head to his body right now, after his lunge (m). */
+  private gapNow = ENEMY_DIST;
+  private whiffAt = 0;
+  private chimeKey = -1;
+  private dodgeGold = false;
+  /** Floor arc: how far your blade reaches. */
+  private readonly reachMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide });
+  private readonly reachArc = new THREE.Mesh(new THREE.BufferGeometry(), this.reachMat);
+  private reachR = 0;
+  /** Grapple wire, shown for a moment from the left hand. */
+  private readonly wire = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+    new THREE.LineBasicMaterial({ color: 0xd8c08a, transparent: true }),
+  );
+  private wireT = 0;
   /** main.ts applies a graphics level (foveation, refresh rate, render scale). */
   onGraphics: (level: 'high' | 'low') => void = () => {};
   private calloutKey = '';
@@ -212,7 +244,11 @@ export class Game {
     const q = new URLSearchParams(location.search);
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
-    this.space.group.add(this.timeline.mesh, this.coach.mesh);
+    this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
+    scene.add(this.wire);
+    this.wire.visible = false;
+    this.wire.frustumCulled = false;
+    this.reachArc.renderOrder = 5;
     place(this.timeline.mesh, { x: -0.95, y: 0.05, z: ENEMY_DIST - 0.45 });
     place(this.coach.mesh, { x: 0.9, y: 0.05, z: ENEMY_DIST - 0.45 });
     this.timeline.mesh.visible = false;
@@ -276,6 +312,7 @@ export class Game {
 
     if (f.btnB && this.phase !== 'calibrate') {
       this.space.calibrate(f.headPos, f.headQuat);
+      this.resetFootwork();
       this.flashResult('Recalibrated', COLORS.info, t);
     }
     if (f.btnA) {
@@ -319,6 +356,13 @@ export class Game {
     }
 
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
+    place(this.enemyPanel.mesh, { x: this.enemyView.footX, y: 0.66, z: ENEMY_DIST + this.enemyView.footZ });
+    place(this.callout.mesh, { x: this.enemyView.footX, y: 0.95, z: ENEMY_DIST + this.enemyView.footZ - 0.1 });
+    if (this.wireT > 0) {
+      this.wireT = Math.max(0, this.wireT - dt / 300);
+      (this.wire.material as THREE.LineBasicMaterial).opacity = this.wireT;
+      this.wire.visible = this.wireT > 0;
+    }
     this.sword.guarding = this.settings.blockButton && f.blockHeld && f.hasSword;
     this.sword.update(dt);
     this.sparks.update(dt);
@@ -352,6 +396,7 @@ export class Game {
     const f = this.input.frame;
     this.space.follow(f.headPos, dt);
     this.space.toDuel(f.headPos, this.headCurr);
+    this.updateFootwork(t, dt);
 
     if (f.hasSword) {
       // Guards are measured relative to the current head position (x/z) and the calibrated height (y).
@@ -383,11 +428,20 @@ export class Game {
         const move = this.tmp.copy(f.tip).sub(this.prevTip);
         const along = this.tmp2.copy(f.tip).sub(f.hilt).normalize();
         strikePoke = move.length() > 1e-4 && move.normalize().dot(along) > POKE_ALIGN;
+      } else if (this.isXR && !contact && speed > STRIKE_MIN_SPEED && t >= this.whiffAt && this.phase === 'fight') {
+        // A fast swing at him that falls short: say so, and by how much.
+        const short = this.enemyView.bodyDist(f.hilt, f.tip, this.space) - BODY_R;
+        if (short < 0.6 && this.swordCurr.tip.z > 0.3) this.whiff(short, t);
       }
     }
     if (!this.isXR && f.rightTrigger && this.phase === 'fight' && t >= this.strikeReadyAt) {
-      strikeSpeed = 3; // desktop: click = strike, on the side the mouse holds the sword
-      strikeZone = zoneOf(this.swordCurr.tip.x);
+      // Desktop: click = strike on the side the mouse holds the sword, if he's within your reach.
+      const short = this.gapNow - this.reachR;
+      if (short > 0) this.whiff(short, t);
+      else {
+        strikeSpeed = 3;
+        strikeZone = zoneOf(this.swordCurr.tip.x);
+      }
     }
     if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS[f.twoHanded ? 'two' : 'one'] * this.weapon.strikeCooldownMult;
 
@@ -412,8 +466,24 @@ export class Game {
     if (useBtn && f.blockHeld && !this.blockWas) this.input.pulse('right', 0.15, 12);
     this.blockWas = useBtn && f.blockHeld;
 
+    // Grapple: left trigger fires a wire where the left hand points (desktop: always at him).
+    let grapple: 'hit' | 'miss' | null = null;
+    if (f.grapple && this.phase === 'fight' && t >= this.duel.player.grappleReadyAt && this.duel.enemy.state !== 'dead') {
+      const chest = this.enemyView.chestWorld(this.space, this.tmp);
+      let hit: boolean;
+      if (this.isXR) {
+        const end = this.tmp2.copy(f.leftDir).multiplyScalar(GRAPPLE_RANGE_M).add(f.leftPos);
+        hit = this.enemyView.bodyDist(f.leftPos, end, this.space) < GRAPPLE_AIM_M && f.leftPos.distanceTo(chest) < GRAPPLE_RANGE_M;
+      } else hit = this.gapNow < GRAPPLE_RANGE_M;
+      grapple = hit ? 'hit' : 'miss';
+      const to = hit ? chest : this.tmp2.copy(f.leftDir).multiplyScalar(GRAPPLE_RANGE_M).add(f.leftPos);
+      this.showWire(this.isXR ? f.leftPos : this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.35, 0)), to);
+      this.sfx.play('grapple');
+      this.input.pulse('left', 0.7, 60);
+    }
+
     let ability: AbilityId | null = null;
-    if (f.leftTrigger) ability = 'slowTime';
+    if (f.sigil) ability = 'slowTime';
     else if (f.btnX) ability = 'ward'; // left grip is for holding the sword with both hands
 
     this.duel.step({
@@ -430,7 +500,16 @@ export class Game {
       ability,
       dash,
       blockHeld: held,
+      outOfReach: this.gapNow > ENEMY_REACH,
+      grapple,
     });
+    // Red attack about to land: a distinct chime 400 ms out (the dodge cue).
+    const ra = this.duel.currentAttack;
+    const re = this.duel.enemy;
+    if (ra && ra.perilous !== 'none' && !re.struck && this.chimeKey !== re.attackStart && this.duel.windup(ra) - (re.clock - re.attackStart) <= 400) {
+      this.chimeKey = re.attackStart;
+      this.sfx.play('chime');
+    }
     for (const ev of this.duel.events) {
       this.onEvent(ev, t);
       if (this.training) this.trainEvent(ev);
@@ -451,9 +530,12 @@ export class Game {
       case 'perfect': {
         const n = ev.chain ?? 1;
         this.sfx.play('perfect');
-        this.input.pulse('right', 1, 80); // matches the hit-stop so freeze and rumble end together
-        this.sparks.burst(contact, 0xffd060, 40, 2.5);
-        this.waves.emit(contact, 0xffd060, 0.35 + 0.08 * Math.min(4, n));
+        this.input.pulse('right', 1, this.timing.hitStopMs); // rumble and freeze end together
+        this.input.pulse('left', 0.6, this.timing.hitStopMs);
+        this.sparks.burst(contact, 0xffd060, 70, 3.2);
+        this.sparks.burst(contact, 0xff5030, 25, 2.2); // a red edge to the burst
+        this.waves.emit(contact, 0xffd060, 0.45 + 0.1 * Math.min(4, n), 420);
+        this.waves.emit(contact, 0xffffff, 0.25, 260);
         this.sword.flash(0xffc040);
         this.enemyView.react('parried', this.duel);
         this.record(ev.offsetMs!, 'perfect', []);
@@ -479,23 +561,53 @@ export class Game {
         this.input.pulse('right', 1, 250);
         this.input.pulse('left', 1, 250);
         this.record(ev.offsetMs ?? 0, 'hit', ev.faults ?? []);
+        const need = ev.perilous === 'thrust' ? 'thrust: dodge SIDEWAYS' : 'sweep: DUCK or dash BACK';
+        const wrongKind = !!ev.dodge && !!ev.attackId && !dodgeBeats(ev.dodge, (ATTACKS as Record<string, AttackDef>)[ev.attackId] ?? ATTACKS.thrust);
         const why =
-          ev.perilous === 'thrust'
-            ? ' (thrust: lean or side-dash!)'
-            : ev.perilous === 'sweep'
-              ? ' (sweep: duck or back-dash!)'
-              : ev.faults?.includes('side')
+          ev.perilous && ev.perilous !== 'none'
+            ? ev.dodge && !wrongKind
+              ? ` · dodged ${Math.round(ev.dodgeEarlyMs ?? 0)} ms early (i-frames last ${this.timing.iframesMs})`
+              : ev.dodge
+                ? ` · wrong dodge (${need})`
+                : ` (${need})`
+            : ev.faults?.includes('side')
                 ? ` · block ${ev.dir === 'high' ? 'HIGH' : ev.dir?.toUpperCase()}`
                 : ` · ${faultText(ev.faults)}`;
         this.flashResult(`HIT${why}`, COLORS.hit, t);
         break;
       }
       case 'dodged':
-        this.sfx.play('dodge');
         this.enemyView.react('dodged', this.duel);
         this.dodgeT = 1;
-        this.flashResult(ev.perilous && ev.perilous !== 'none' ? 'DODGED · COUNTER NOW!' : 'DODGED', COLORS.perfect, t);
+        this.dodgeGold = !!ev.perfect;
+        if (ev.perfect) {
+          this.sfx.play('clash');
+          this.input.pulse('right', 1, 110);
+          this.input.pulse('left', 1, 110);
+          this.waves.emit(this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.2, 0)), 0xffd060, 0.9, 450);
+          this.flashResult('PERFECT DODGE · COUNTER NOW!', COLORS.perfect, t);
+        } else {
+          this.sfx.play('dodge');
+          this.flashResult(ev.perilous && ev.perilous !== 'none' ? 'DODGED · early, no counter' : 'DODGED', COLORS.block, t);
+        }
         break;
+      case 'whiff':
+        this.sfx.play('whoosh', 0.6);
+        this.enemyView.react('dodged', this.duel);
+        this.flashResult('OUT OF HIS REACH · he missed', COLORS.open, t);
+        break;
+      case 'grapple': {
+        const g = ev.grapple;
+        if (g === 'guardBreak' || g === 'pull' || g === 'backfire') this.pullIn();
+        if (g === 'miss' || g === 'backfire') this.strikeReadyAt = Math.max(this.strikeReadyAt, t + this.timing.grappleLockMs);
+        if (g === 'guardBreak') this.sparks.burst(this.enemyView.chestWorld(this.space, this.tmp3), 0xd8c08a, 20, 1.6);
+        this.flashResult(
+          g === 'guardBreak' ? 'GUARD TORN OPEN · STRIKE!' : g === 'pull' ? 'PULLED IN' : g === 'backfire' ? 'GRAPPLED INTO A RED ATTACK · locked' : 'GRAPPLE MISSED · locked',
+          g === 'guardBreak' ? COLORS.open : g === 'pull' ? COLORS.info : COLORS.hit,
+          t,
+        );
+        break;
+      }
       case 'dodge':
         this.sfx.play('dodge', 0.35);
         break;
@@ -529,6 +641,7 @@ export class Game {
         this.sparks.burst(contact, 0xffffff, 6, 1);
         break;
       case 'enemyPostureBreak':
+        this.footwork.stumble(this.playerZ);
         this.sfx.play('peril');
         this.waves.emit(contact, 0xffffff, 0.9, 520);
         this.waves.emit(contact, 0xffd060, 0.6, 380);
@@ -621,7 +734,96 @@ export class Game {
     this.enemyView.reset();
     this.resetPrev = true;
     this.tl = null;
+    (this.input as { resetPosition?: () => void }).resetPosition?.();
+    this.resetFootwork();
+    this.setReach();
   }
+
+  /**
+   * Put him back at his home distance straight in front of you (new duel, re-centre). Done on the
+   * next fight frame, once your head position has been read from this frame's input.
+   */
+  private resetFootwork(): void {
+    this.footResetPending = true;
+  }
+  private footResetPending = true;
+
+  // ---------------------------------------------------------------- spacing
+
+  /**
+   * Footwork runs in the fixed calibration frame; the view frame trails your head. So: your
+   * position there, his move, then where to draw him in the view frame, how far his lunge may go,
+   * and the gap that decides reach (his and yours).
+   */
+  private updateFootwork(t: number, dt: number): void {
+    const c = this.space.centerOffset(this.tmpC);
+    this.playerX = c.x + this.headCurr.x;
+    this.playerZ = c.z + this.headCurr.z;
+    if (this.footResetPending) {
+      this.footResetPending = false;
+      this.footwork.reset(this.playerX, this.playerZ);
+    }
+    const e = this.duel.enemy;
+    this.footwork.update({ t, dtMs: dt, px: this.playerX, pz: this.playerZ, enemy: e.state, struck: e.struck });
+    const gap = this.footwork.gap(this.playerZ);
+    const ev = this.enemyView;
+    ev.footX = this.footwork.x - c.x;
+    ev.footZ = this.footwork.z - c.z - ENEMY_DIST;
+    ev.lungeMax = Math.max(0, Math.min(ATTACK_LUNGE, gap - (ENEMY_DIST - ATTACK_LUNGE)));
+    this.gapNow = gap - ev.lunge;
+    this.updateReachArc();
+  }
+
+  /** Your reach depends on the weapon: arm + blade + his body radius. */
+  private setReach(): void {
+    const r = ARM_M + this.weapon.bladeM + BODY_R;
+    if (Math.abs(r - this.reachR) < 1e-6) return;
+    this.reachR = r;
+    this.reachArc.geometry.dispose();
+    // An arc in front of you on the floor (RingGeometry is in XY; rotated flat, -90° points at him).
+    this.reachArc.geometry = new THREE.RingGeometry(r - 0.015, r + 0.015, 48, 1, -Math.PI / 2 - 0.6, 1.2);
+    this.reachArc.rotation.x = -Math.PI / 2;
+  }
+
+  private updateReachArc(): void {
+    const show = this.settings.reachMarker && this.phase === 'fight' && this.duel.enemy.state !== 'dead';
+    this.reachArc.visible = show;
+    if (!show) return;
+    DuelSpace.toLocal({ x: this.headCurr.x, y: -this.space.height + 0.012, z: this.headCurr.z }, this.reachArc.position);
+    const inReach = this.gapNow <= this.reachR;
+    this.reachMat.color.setHex(inReach ? 0x60ff9a : 0xffffff);
+    this.reachMat.opacity = inReach ? 0.6 : 0.22;
+  }
+
+  /** A swing that fell short: whoosh, a white trail flash, and how far short. */
+  private whiff(shortM: number, t: number): void {
+    this.whiffAt = t + 600;
+    this.sfx.play('whoosh');
+    this.trailWhiffT = 1;
+    this.flashResult(`TOO FAR · ${Math.max(1, Math.round(shortM * 100))} cm short`, COLORS.info, t);
+    if (this.training) this.trainStats.whiffs++;
+  }
+
+  /** Grapple hit: pull yourself toward him (never closer than GRAPPLE_STOP_GAP_M). */
+  private pullIn(): void {
+    const pull = Math.max(0, Math.min(GRAPPLE_PULL_M, this.footwork.gap(this.playerZ) - GRAPPLE_STOP_GAP_M));
+    if (pull <= 0) return;
+    const step = { x: 0, y: 0, z: pull };
+    DuelSpace.toLocal(step, this.tmp3).applyQuaternion(this.space.group.quaternion);
+    this.input.move(this.tmp3, step);
+  }
+
+  private showWire(from: THREE.Vector3, to: THREE.Vector3): void {
+    const pos = this.wire.geometry.getAttribute('position') as THREE.BufferAttribute;
+    pos.setXYZ(0, from.x, from.y, from.z);
+    pos.setXYZ(1, to.x, to.y, to.z);
+    pos.needsUpdate = true;
+    this.wire.visible = true;
+    this.wireT = 1;
+  }
+  private readonly tmp3 = new THREE.Vector3();
+  private readonly tmp4 = new THREE.Vector3();
+  private trailWhiffT = 0;
 
   // ---------------------------------------------------------------- training
 
@@ -632,7 +834,7 @@ export class Game {
     this.sword.setBladeLength(this.weapon.bladeM);
     this.run = new Run((Date.now() ^ Math.floor(t)) >>> 0);
     this.run.equip(this.weapon, null);
-    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 });
+    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0, whiffs: 0 });
     this.newDuel(t);
     this.setPhase('fight', t);
     this.flashResult(`Training · ${this.dummyName()}`, COLORS.info, t);
@@ -652,7 +854,7 @@ export class Game {
   /** Swap what the dummy does. A fresh duel, so a swing in flight never carries over. */
   private setDummy(mode: DummyMode, t: number): void {
     this.dummyMode = mode;
-    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 });
+    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0, whiffs: 0 });
     this.newDuel(t);
     this.flashResult(`Dummy: ${this.dummyName()}`, COLORS.info, t);
     this.sfx.play('ui');
@@ -683,6 +885,7 @@ export class Game {
           perfectLate: this.timing.perfectLateMs,
           blockLate: this.timing.blockLateMs,
           iframes: this.timing.iframesMs + d.mods.iframesBonusMs,
+          perfectDodge: this.timing.perfectDodgeMs,
           counter: null,
           now: 0,
           marks: [],
@@ -707,7 +910,10 @@ export class Game {
         break;
       case 'dodged':
         st.dodged++;
-        if (this.tl && ev.perilous !== 'none') this.tl.counter = [0, rel(d.player.counterUntil)];
+        if (this.tl && ev.perfect) this.tl.counter = [0, rel(d.player.counterUntil)];
+        break;
+      case 'whiff':
+        this.tl?.marks.push({ ms: 0, lane: 'guard', color: COLORS.open, label: 'out of reach' });
         break;
       case 'enemyHit':
         st.landed++;
@@ -734,8 +940,8 @@ export class Game {
       out.push(['COUNTER WINDOW', C.GOLD, 44], [`Hit him anywhere for 1.5× damage (${Math.ceil(counterLeft)} ms left).`, C.TEXT, 30]);
     } else if (att && !e.struck) {
       const left = Math.max(0, d.windup(att) - (e.clock - e.attackStart));
-      if (att.perilous === 'thrust') out.push(['RED THRUST: DODGE', C.RED, 44], ['Lean or flick the left stick sideways just before it lands. Can\'t be blocked.', C.TEXT, 30]);
-      else if (att.perilous === 'sweep') out.push(['RED SWEEP: DODGE', C.RED, 44], ['Duck or flick the left stick back just before it lands. Can\'t be blocked.', C.TEXT, 30]);
+      if (att.perilous === 'thrust') out.push(['RED THRUST: DODGE SIDEWAYS', C.RED, 40], ['Lean or flick the left stick sideways after the chime. Last 150 ms = PERFECT (counter); earlier = safe only.', C.TEXT, 30]);
+      else if (att.perilous === 'sweep') out.push(['RED SWEEP: DUCK OR DASH BACK', C.RED, 40], ['Duck or flick the left stick back after the chime. Last 150 ms = PERFECT (counter); earlier = safe only.', C.TEXT, 30]);
       else {
         const [title, how] = calloutFor(att);
         const btn = this.settings.blockButton ? (this.isXR ? ' and HOLD RIGHT GRIP' : ' and HOLD SHIFT') : '';
@@ -755,10 +961,16 @@ export class Game {
         [`Moves his guard in ${(shiftIn / 1000).toFixed(1)} s, or right after you land a hit.`, C.DIM, 28],
       );
     }
+    const inReach = this.gapNow <= this.reachR;
+    out.push([
+      `Distance ${this.gapNow.toFixed(2)} m · your reach ${this.reachR.toFixed(2)} m · ${inReach ? 'IN REACH' : 'step in'}${this.gapNow > ENEMY_REACH ? ' · out of his reach' : ''}`,
+      inReach ? C.GREEN : C.DIM,
+      26,
+    ]);
     const two = this.input.frame.twoHanded;
     out.push([two ? 'TWO HANDS: steadier guard, ×1.25 damage, slower strikes' : 'ONE HAND: quick strikes, pokes ×2. Left grip on the handle = two hands', '#ffd060', 26]);
     const s = this.trainStats;
-    out.push([`Perfect ${s.perfect} · Block ${s.block} · Hit ${s.hit} · Dodged ${s.dodged} · Landed ${s.landed} · Deflected ${s.deflected}`, C.DIM, 26]);
+    out.push([`Perfect ${s.perfect} · Block ${s.block} · Hit ${s.hit} · Dodged ${s.dodged} · Landed ${s.landed} · Deflected ${s.deflected} · Too far ${s.whiffs}`, C.DIM, 26]);
     return out;
   }
 
@@ -778,7 +990,7 @@ export class Game {
       this.coach,
       `TRAINING · ${this.dummyName().toUpperCase()} · ${DUMMY_SPEEDS[this.speedIdx].name}`,
       this.coachLines(),
-      this.isXR ? 'R-stick ←→ dummy · L-stick flick dash · Y menu' : 'T dummy · arrows dash · M menu',
+      this.isXR ? 'R-stick ←→ dummy · L-stick flick dash · L-trigger grapple · Y menu' : 'T dummy · arrows dash · F grapple · M menu',
     );
   }
 
@@ -901,6 +1113,15 @@ export class Game {
         },
       },
       {
+        label: 'Reach marker',
+        value: () => onOff(s.reachMarker),
+        hint: () => 'Floor arc: how far your blade reaches (green = in range)',
+        change: () => {
+          s.reachMarker = !s.reachMarker;
+          save();
+        },
+      },
+      {
         label: 'Swing guides',
         value: () => onOff(s.guides),
         hint: () => 'Ghost sword and swing path',
@@ -954,6 +1175,7 @@ export class Game {
         act: () => {
           const f = this.input.frame;
           this.space.calibrate(f.headPos, f.headQuat);
+          this.resetFootwork();
           this.closeMenu();
         },
       },
@@ -1152,7 +1374,7 @@ export class Game {
       ctx.fillText(`${this.weapon.name} · Boons: ${owned.length ? owned.join(', ') : 'none yet'}`, 32, 585);
       const ab = d.mods.abilities.map((a) => {
         const left = Math.max(0, d.player.abilityReadyAt[a] - t) / 1000;
-        return `${a === 'slowTime' ? 'L-trigger Time' : 'X Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
+        return `${a === 'slowTime' ? 'L-stick press Time' : 'X Ward'}: ${left > 0 ? left.toFixed(0) + 's' : 'ready'}`;
       });
       if (ab.length) ctx.fillText(ab.join('   '), 32, 625);
       ctx.fillStyle = '#7c8594';
@@ -1198,7 +1420,7 @@ export class Game {
       line(xr ? 'LEFT HAND: squeeze grip on the handle = two hands' : 'G: two-handed grip', '700 32px system-ui, sans-serif', '#ffd060', 38);
       line('Steadier blocks, harder hits, slower. One hand: quick + pokes.', '500 27px system-ui, sans-serif', '#d8dce4', 50);
       line(
-        xr ? 'Y = MENU (every button) · left stick flick = DASH · X ward' : 'M = MENU (every key) · arrows = DASH · E ward',
+        xr ? 'Y = MENU (every button) · L-stick flick = DASH · L-trigger = GRAPPLE' : 'M = MENU (every key) · arrows = DASH · F = GRAPPLE',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,
@@ -1320,7 +1542,7 @@ export class Game {
     let a = 0.7 * this.hurtT; // peaks at 0.7, fades out linearly over 400 ms
     this.dodgeT = Math.max(0, this.dodgeT - dt / 350);
     if (this.dodgeT > 0 && this.hurtT === 0) {
-      color = 0x60c0ff; // a clean dodge: brief cool flash at the edges
+      color = this.dodgeGold ? 0xffc040 : 0x60c0ff; // perfect dodge gold, plain dodge cool blue
       a = 0.45 * this.dodgeT;
     }
     if (fighting && p.hp / p.hpMax < 0.25) a = Math.max(a, 0.25 + 0.2 * Math.sin(t / 220));
@@ -1339,7 +1561,8 @@ export class Game {
     if (this.isXR && f.hasSword && speed > STRIKE_MIN_SPEED && (this.phase === 'fight' || this.phase === 'won')) {
       const counter = this.duel.time <= this.duel.player.counterUntil || this.duel.enemy.state === 'stagger';
       this.tmp2.copy(f.hilt).lerp(f.tip, 0.45);
-      this.playerTrail.push(this.tmp2, f.tip, this.trailClock, counter ? 0xffd060 : 0xcfe6ff);
+      this.trailWhiffT = Math.max(0, this.trailWhiffT - dt / 400);
+      this.playerTrail.push(this.tmp2, f.tip, this.trailClock, counter ? 0xffd060 : this.trailWhiffT > 0 ? 0xffffff : 0xcfe6ff);
     }
     this.playerTrail.update(this.trailClock);
   }

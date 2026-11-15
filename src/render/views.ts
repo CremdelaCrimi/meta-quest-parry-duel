@@ -523,7 +523,7 @@ export class EnemyView {
   }
 
   /** Current step-in toward the player (m), eased so combos never snap. */
-  private lunge = 0;
+  lunge = 0;
   private readonly trail = new SwingTrail();
   private trailClock = 0;
   /** One pip per hit in the current pattern (1, 2 or 3), lit as each hit lands. */
@@ -535,7 +535,7 @@ export class EnemyView {
       if (!pip.parent) this.root.add(pip);
       pip.visible = i < n;
       if (!pip.visible) return;
-      DuelSpace.toLocal({ x: (i - (n - 1) / 2) * 0.09, y: -space.height + 2.13, z: Dz }, pip.position);
+      DuelSpace.toLocal({ x: this.footX + (i - (n - 1) / 2) * 0.09, y: -space.height + 2.13, z: Dz }, pip.position);
       const done = i < e.stepIndex || (i === e.stepIndex && e.struck);
       const mat = pip.material as THREE.MeshBasicMaterial;
       mat.color.setHex(done ? 0xffd34d : i === e.stepIndex ? 0xffffff : 0x555a66);
@@ -572,13 +572,23 @@ export class EnemyView {
 
   /** Swept test: does the segment a->b (world) pass within `r` of the enemy body axis? */
   bodyHit(a: THREE.Vector3, b: THREE.Vector3, space: DuelSpace, r = 0.27): boolean {
-    const z = D - this.lunge;
-    const feet = space.toWorld({ x: 0, y: -space.height + 0.2, z }, this.v1);
-    const head = space.toWorld({ x: 0, y: -space.height + 1.7, z }, this.v2);
-    if (segSegDist(a, b, feet, head) >= r) return false;
+    if (this.bodyDist(a, b, space) >= r) return false;
     this.hitPoint.copy(a).lerp(b, segS); // where the blade first met him, for the strike zone
     return true;
   }
+  /** Closest distance (m) from the segment a->b (world) to his body axis. Sets segS for hitPoint. */
+  bodyDist(a: THREE.Vector3, b: THREE.Vector3, space: DuelSpace): number {
+    const z = D + this.footZ - this.lunge;
+    const feet = space.toWorld({ x: this.footX, y: -space.height + 0.2, z }, this.v1);
+    const head = space.toWorld({ x: this.footX, y: -space.height + 1.7, z }, this.v2);
+    return segSegDist(a, b, feet, head);
+  }
+
+  /** A point on his chest (world), where the grapple wire lands. */
+  chestWorld(space: DuelSpace, out: THREE.Vector3): THREE.Vector3 {
+    return space.toWorld({ x: this.footX, y: -space.height + 1.25, z: D + this.footZ - this.lunge - 0.2 }, out);
+  }
+
   /** World point on the player's blade closest to his body at the last bodyHit. */
   readonly hitPoint = new THREE.Vector3();
 
@@ -608,8 +618,14 @@ export class EnemyView {
     this.openMat.color.setHex(counter ? 0xffd040 : 0x60ff9a);
     this.openMark.scale.setScalar(counter ? 1.6 : 1);
     this.openMark.visible = this.openMat.opacity > 0.02;
-    DuelSpace.toLocal({ x: this.openX, y: -space.height + 1.2, z: Dz - 0.23 }, this.openMark.position);
+    DuelSpace.toLocal({ x: this.footX + this.openX, y: -space.height + 1.2, z: Dz - 0.23 }, this.openMark.position);
   }
+
+  /** Footwork: his position relative to the canonical spot (ENEMY_DIST straight ahead), in duel metres. */
+  footX = 0;
+  footZ = 0;
+  /** How far the attack lunge may step in (less when you're already close). */
+  lungeMax = ATTACK_LUNGE;
 
   /** Step in through the late windup and hold through the strike, then ease back during recovery. */
   private updateLunge(duel: Duel, animMs: number): void {
@@ -619,7 +635,7 @@ export class EnemyView {
     if (att && e.state === 'attack') {
       const since = e.clock - e.attackStart;
       const w = duel.windup(att);
-      target = since > w * 0.4 && since < w + 300 ? ATTACK_LUNGE : 0;
+      target = since > w * 0.4 && since < w + 300 ? this.lungeMax : 0;
     }
     this.lunge += (target - this.lunge) * (1 - Math.exp((-7 * animMs) / 1000));
   }
@@ -636,8 +652,9 @@ export class EnemyView {
 
     // Body stands on the floor at the enemy position, stepped in while attacking.
     this.updateLunge(duel, animMs);
-    const Dz = D - this.lunge;
-    DuelSpace.toLocal({ x: 0, y: -space.height, z: Dz }, this.body.position);
+    const Dz = D + this.footZ - this.lunge;
+    const fx = this.footX;
+    DuelSpace.toLocal({ x: fx, y: -space.height, z: Dz }, this.body.position);
 
     if (e.state === 'dead') {
       this.deadT += dtMs;
@@ -698,16 +715,23 @@ export class EnemyView {
       this.body.rotation.x = this.lean;
     }
 
-    // Blade and arms.
-    const hilt = DuelSpace.toLocal(this.pose.hilt, this.v1);
-    const tip = DuelSpace.toLocal(this.pose.tip, this.v2);
+    // Blade and arms. Blade poses are authored for the canonical spot, so they follow his footwork,
+    // except that a swing converges on where you are: the offset fades out toward the strike and
+    // back in through the recovery.
+    let k = 1;
+    if (att && e.state === 'attack') {
+      k = !e.struck ? 1 - Math.min(1, Math.max(0, p)) ** 2 : Math.min(1, (e.clock - e.attackStart - duel.windup(att)) / 400);
+    }
+    const ph = this.pose.hilt, pt = this.pose.tip;
+    const hilt = DuelSpace.toLocal({ x: ph.x + fx * k, y: ph.y, z: ph.z + this.footZ * k }, this.v1);
+    const tip = DuelSpace.toLocal({ x: pt.x + fx * k, y: pt.y, z: pt.z + this.footZ * k }, this.v2);
     placeSegment(this.blade, hilt, tip, this.v3);
     const shoulderY = -space.height + 1.45;
     for (let i = 0; i < 2; i++) {
       // Shoulders turn with the torso (local rotation.y = twist maps to duel z = x0·sin(twist)).
       const x0 = i === 0 ? -0.2 : 0.2;
       const tw = this.body.rotation.y;
-      const sh = DuelSpace.toLocal({ x: x0 * Math.cos(tw), y: shoulderY, z: Dz - 0.02 + x0 * Math.sin(tw) }, this.v2);
+      const sh = DuelSpace.toLocal({ x: fx + x0 * Math.cos(tw), y: shoulderY, z: Dz - 0.02 + x0 * Math.sin(tw) }, this.v2);
       placeSegment(this.arms[i], sh, hilt, this.v3);
     }
 
@@ -715,7 +739,7 @@ export class EnemyView {
     const peril = !!att && att.perilous !== 'none' && !e.struck;
     this.perilMark.visible = peril;
     if (peril) {
-      DuelSpace.toLocal({ x: 0, y: -space.height + 2.05, z: Dz }, this.perilMark.position);
+      DuelSpace.toLocal({ x: fx, y: -space.height + 2.05, z: Dz }, this.perilMark.position);
       this.perilMark.rotation.y += dtMs * 0.004;
     }
     const glow = att && !e.struck ? Math.min(1, Math.max(0, p)) : 0;
@@ -731,7 +755,7 @@ export class EnemyView {
     this.updateOpening(duel, space, Dz, dtMs);
 
     this.deathMark.visible = e.state === 'stagger';
-    if (this.deathMark.visible) DuelSpace.toLocal({ x: 0, y: -space.height + 1.25, z: Dz - 0.24 }, this.deathMark.position);
+    if (this.deathMark.visible) DuelSpace.toLocal({ x: fx, y: -space.height + 1.25, z: Dz - 0.24 }, this.deathMark.position);
 
     // Bars above the head.
     const top = -space.height + 2.0;

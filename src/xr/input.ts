@@ -47,6 +47,13 @@ export interface InputFrame {
   cycle: number;
   /** Block button held (level, not edge): right grip. Desktop: Shift or right mouse button. */
   blockHeld: boolean;
+  /** Fire the grapple: left trigger (desktop: F). */
+  grapple: boolean;
+  /** Time Sigil: left stick press (desktop: Q). */
+  sigil: boolean;
+  /** Left hand position and pointing direction (world), for aiming the grapple. */
+  leftPos: THREE.Vector3;
+  leftDir: THREE.Vector3;
   /** Desktop: a pickup card chosen by number key / click (0-2), else -1. */
   choose: number;
 }
@@ -91,6 +98,10 @@ function emptyFrame(): InputFrame {
     dash: null,
     cycle: 0,
     blockHeld: false,
+    grapple: false,
+    sigil: false,
+    leftPos: new THREE.Vector3(),
+    leftDir: new THREE.Vector3(0, 0, -1),
     choose: -1,
   };
 }
@@ -225,7 +236,15 @@ export class XRInput implements InputDevice {
     f.btnA = a && !pv.a;
     f.btnB = b && !pv.b;
     f.btnY = y && !pv.y;
-    f.menu = (y && !pv.y) || (ls && !pv.ls);
+    f.menu = y && !pv.y;
+    f.grapple = lt && !pv.lt;
+    f.sigil = ls && !pv.ls;
+    if (this.leftGripObj?.visible) {
+      // Grip space -Z points forward out of the fist: aim the wire where the left hand points.
+      this.leftGripObj.getWorldPosition(f.leftPos);
+      this.leftGripObj.getWorldQuaternion(this.rq);
+      f.leftDir.set(0, 0, -1).applyQuaternion(this.rq);
+    }
     f.select = (rt && !pv.rt) || (a && !pv.a);
     f.blockHeld = rg;
     Object.assign(pv, { rt, lt, lg, x, a, b, y, ls });
@@ -354,7 +373,7 @@ export class XRInput implements InputDevice {
 //   Mouse left/right/up/down of centre -> left/right/high/low guard. Click = strike.
 //   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-6 = pick a card,
 //   R = recalibrate, M / Esc = menu (arrows + Enter inside it), arrows = dash, T = next dummy,
-//   Shift or right mouse button = hold to block.
+//   Shift or right mouse button = hold to block, F = grapple, Q = Time Sigil.
 
 export class DesktopInput implements InputDevice {
   readonly frame = emptyFrame();
@@ -365,7 +384,7 @@ export class DesktopInput implements InputDevice {
   private keys = new Set<string>();
   private pressedKeys = new Set<string>();
   private lean = new THREE.Vector3();
-  /** Dash offset in duel coordinates: jumps out, then drifts back as the enemy re-centres on you. */
+  /** Where you stand in the fixed duel frame (dashes move it; it stays where you put it). */
   private readonly dashTarget = { x: 0, z: 0 };
   private readonly dashCur = { x: 0, z: 0 };
   private readonly base = new THREE.Vector3(0, 1.6, 0);
@@ -412,14 +431,12 @@ export class DesktopInput implements InputDevice {
     this.lean.x += (tx - this.lean.x) * 0.35;
     this.lean.y += (ty - this.lean.y) * 0.35;
     const dc = this.dashCur, dtg = this.dashTarget;
-    dtg.x *= 0.975; // ~0.7 s back to centre at 60 fps, like DuelSpace.follow in VR
-    dtg.z *= 0.975;
     dc.x += (dtg.x - dc.x) * 0.45;
     dc.z += (dtg.z - dc.z) * 0.45;
     this.v.x = this.lean.x + dc.x;
     this.v.y = this.lean.y;
     this.v.z = dc.z;
-    if (this.space.calibrated) this.space.toWorld(this.v, f.headPos);
+    if (this.space.calibrated) this.space.fromCalib(this.v, f.headPos);
     else f.headPos.copy(this.base);
     this.camera.position.copy(f.headPos);
     f.headQuat.copy(this.camera.quaternion);
@@ -443,15 +460,18 @@ export class DesktopInput implements InputDevice {
     h.z += dc.z;
     t.z += dc.z;
     if (this.space.calibrated) {
-      this.space.toWorld(h, f.hilt);
-      this.space.toWorld(t, f.tip);
+      this.space.fromCalib(h, f.hilt);
+      this.space.fromCalib(t, f.tip);
       this.sword.placeFrom(f.hilt, f.tip);
     }
     f.hasSword = this.space.calibrated;
 
     const pk = this.pressedKeys;
     f.rightTrigger = this.click;
-    f.leftTrigger = pk.has('q');
+    f.leftTrigger = false;
+    f.sigil = pk.has('q');
+    f.grapple = pk.has('f');
+    f.leftPos.copy(f.headPos);
     f.leftGrip = false;
     f.btnX = pk.has('e');
     if (pk.has('g')) f.twoHanded = !f.twoHanded; // desktop stand-in for the left hand on the handle
@@ -475,7 +495,12 @@ export class DesktopInput implements InputDevice {
   hapticScale = 1;
 
   move(_world: THREE.Vector3, duel: V3): void {
-    this.dashTarget.x += duel.x;
-    this.dashTarget.z += duel.z;
+    this.dashTarget.x = Math.max(-2.5, Math.min(2.5, this.dashTarget.x + duel.x));
+    this.dashTarget.z = Math.max(-2.5, Math.min(1.2, this.dashTarget.z + duel.z));
+  }
+
+  /** New duel or recalibration: back to where you started. */
+  resetPosition(): void {
+    this.dashTarget.x = this.dashTarget.z = this.dashCur.x = this.dashCur.z = 0;
   }
 }

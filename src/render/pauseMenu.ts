@@ -192,8 +192,8 @@ export class PauseMenu {
         controller(ctx, 260, 330, 'L', [
           ['Y', 'MENU (this screen)', GOLD],
           ['X', 'Ward: absorb next hit', '#6fb6ff'],
-          ['Stick', 'Flick: DASH that way · press: menu', '#60c0ff'],
-          ['Trigger', 'Time Sigil (once picked up)', '#b48cff'],
+          ['Stick', 'Flick: DASH that way · press: Time Sigil', '#60c0ff'],
+          ['Trigger', 'GRAPPLE: point at him, pulls you in', '#d8c08a'],
           ['Grip', 'Two hands: hand on the handle', '#ffd060'],
         ]);
         controller(ctx, 260, 700, 'R', [
@@ -213,6 +213,7 @@ export class PauseMenu {
           ['T', 'Switch training dummy'],
           ['E', 'Ward: absorb next hit'],
           ['Q', 'Time Sigil (once picked up)'],
+          ['F', 'Grapple: pull yourself in'],
           ['G', 'Two-handed grip'],
           ['1–6', 'Pick a card'],
           ['H', 'Stats panel'],

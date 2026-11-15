@@ -1,7 +1,7 @@
 // Procedurally synthesised sound effects, pre-rendered into AudioBuffers once
 // so playback is a single buffer-source start (lowest latency WebAudio offers).
 
-export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui';
+export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui' | 'whoosh' | 'chime' | 'clash' | 'grapple';
 
 export class Sfx {
   private ctx: AudioContext | null = null;
@@ -47,6 +47,21 @@ export class Sfx {
     make('strike', 0.2, (t) => (noise() * 0.5 + sin(160, t)) * Math.exp(-t * 25));
     make('finisher', 1.2, (t) => Math.exp(-t * 3) * (sin(110, t) + 0.6 * sin(220 * (1 - t * 0.2), t)) + noise() * Math.exp(-t * 20) * 0.6);
     make('ui', 0.12, (t) => sin(880, t) * Math.exp(-t * 30));
+    // A miss: airy, rising noise, so a swing that falls short is never silent.
+    let lp3 = 0;
+    make('whoosh', 0.3, (t) => {
+      lp3 += (noise() - lp3) * (0.2 + t * 2);
+      return lp3 * Math.sin(Math.PI * Math.min(1, t / 0.3)) * 1.6;
+    });
+    // Red attack about to land (400 ms out): two quick high pings, distinct from everything else.
+    make('chime', 0.35, (t) => {
+      const ping = (t0: number) => (t >= t0 ? Math.exp(-(t - t0) * 22) * sin(2637, t - t0) : 0);
+      return ping(0) + ping(0.11);
+    });
+    // Perfect dodge: a heavy metallic clash with a low thump.
+    make('clash', 0.9, (t) => Math.exp(-t * 5) * (sin(990, t) + 0.8 * sin(1870, t) + 0.5 * sin(3110, t)) + Math.exp(-t * 14) * sin(70, t) * 1.5 + noise() * Math.exp(-t * 50));
+    // Grapple wire: a fast descending zip.
+    make('grapple', 0.25, (t) => Math.exp(-t * 10) * sin(1800 * (1 - t * 2.5), t) * 0.8 + noise() * Math.exp(-t * 30) * 0.4);
   }
 
   play(name: SfxName, gain = 1): void {

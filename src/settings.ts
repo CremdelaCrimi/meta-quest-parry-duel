@@ -15,11 +15,13 @@ export interface Settings {
   haptics: number;
   /** Guards only count while the block button (right grip) is held. Off = sword position alone. */
   blockButton: boolean;
+  /** Floor arc showing how far your blade reaches; green when he's in range. */
+  reachMarker: boolean;
 }
 
 const KEY = 'parryDuel.settings';
 
-export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true };
+export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true };
 
 export function loadSettings(): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };

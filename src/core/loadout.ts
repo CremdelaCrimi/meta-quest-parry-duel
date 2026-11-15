@@ -40,11 +40,11 @@ export const WEAPONS: Weapon[] = [
   {
     id: 'wakizashi',
     name: 'Wakizashi',
-    desc: 'Short and quick: −25% damage, +20 ms perfect window, +40% counter damage.',
+    desc: 'Short and quick: −15% damage, +20 ms perfect window, +40% counter damage.',
     bladeM: 0.6,
     strikeCooldownMult: 0.6,
     apply: (m) => {
-      m.playerDamageMult *= 0.75;
+      m.playerDamageMult *= 0.85;
       m.perfectWindowBonusMs += 20;
       m.counterDamageMult *= 1.4;
     },

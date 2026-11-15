@@ -6,7 +6,7 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  Shift / right mouse hold to block, A/D lean, S duck, arrows dash, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
+  Shift / right mouse hold to block, A/D lean, S duck, arrows dash, F grapple, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
   M / Esc menu, R recalibrate.
 - **Older headsets (Quest 1 / Quest 2):** same link, same controls. The game spots the headset and
   switches to a lighter graphics mode by itself (see *Menu and settings*).
@@ -37,19 +37,51 @@ The menu (Y) also picks **Swings** (mixed, vertical only, horizontal only, diago
 sweeps, 2–3 hit strings), **Enemy speed** (slow = the Trainer, normal, fast = the last enemy) and
 **Weapon**. Dummy data lives in `src/core/training.ts`.
 
-## Dash
+## Spacing and reach
+He no longer floats back when you step in: his position is fixed in the arena and he moves with
+deliberate footwork (`src/core/footwork.ts`, from the design consult in `docs/design/`):
+
+| He... | When | How |
+|---|---|---|
+| holds his ground, 1.85 m away | by default | mirrors your sidesteps at 1.0 m/s |
+| backsteps to 1.85 m | you stay inside 1.3 m for 0.4 s while he's idle | 2.5 m/s, then a 1.5 s cooldown |
+| walks back in | you retreat past 2.3 m | 1.5 m/s |
+| steps in, then lunges | during his windup, if you're further than 1.85 m | 2.0 m/s, lunge up to 0.5 m |
+| stands and takes it | you're inside during his recovery | then a fast 0.8 m backstep (4 m/s) |
+| stumbles toward you | his posture breaks | 0.4 m, so short blades reach the finisher |
+
+**Your reach** is arm (0.55 m) + blade + his body (0.27 m): katana 1.70 m, odachi 1.92 m, wakizashi
+1.42 m. At his home distance you have to step or dash in. A **floor arc** in front of you marks your
+reach and turns green when he's inside it (menu → Reach marker). A fast swing that falls short plays
+a whoosh, flashes your trail white and says **TOO FAR · N cm short**. **His reach** is 1.75 m after
+his lunge: be further than that when his blade lands and he misses ("OUT OF HIS REACH"). In training
+the coach shows the live distance and both reaches.
+
+## Dash and perfect dodge
 Flick the **left stick** (desktop: arrow keys) to dash: left/right 0.55 m, toward him 0.5 m, away
 0.6 m, at most one every 400 ms. In VR you really move (an offset reference space slides you over
-140 ms) and the enemy re-centres on you over about a second, so a forward dash buys a moment in
-striking range. Every dash has the dodge's 320 ms of i-frames:
+140 ms); he stays where he is, so a forward dash puts you in striking range. Every dash or lean/duck
+has 320 ms of i-frames from the moment it starts:
 
 | | Normal swing | Red thrust | Red sweep |
 |---|---|---|---|
-| Side dash / lean | dodged | dodged + counter | hit |
-| Back dash / duck | dodged | hit | dodged + counter |
+| Side dash / lean | dodged | dodged | hit |
+| Back dash / duck | dodged | hit | dodged |
 | Forward dash | dodged | hit | hit |
 
-Dodging a normal swing is safe but gives no counter: the perfect parry is still the rewarded answer.
+A dodge that starts in the **last 150 ms** before his blade lands is a **perfect dodge**: a heavy clash,
+gold flash, a brief slow, 30 posture to him (15 against a normal swing) and the gold counter window.
+An earlier dodge inside the i-frames is only safe ("DODGED · early, no counter"). Red attacks ring a
+**chime 400 ms before they land**: dodge after it. A hit says why: "dodged 480 ms early (i-frames last
+320)", "wrong dodge (thrust: dodge SIDEWAYS)", or what you should have done. The training timeline's
+dodge lane shows too early / safe / PERFECT / too late.
+
+## Grapple (left trigger)
+Point your left hand at him and pull the **left trigger** (desktop: F). A wire (3.5 m range) pulls you
+0.5 m toward him (never closer than 1.2 m). Against an idle enemy it also **tears his guard open** for
+0.7 s (every strike lands) and deals 15 posture. It costs 20 of your posture and has a 3 s cooldown. A
+miss, or grappling into a red attack, locks your strikes and perfects for 0.6 s. (Time Sigil moved to
+the left stick press.)
 
 ## Menu and settings
 Press **Y** (or click the left thumbstick) at any time to pause. The fight freezes until you close it.
@@ -87,7 +119,8 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Right stick flick ←→ | Switch the training dummy |
 | Left grip, hand on the handle | **Two-handed grip** (see below) |
 | X | Ward: absorb the next hit (every run starts with it) |
-| Left trigger | Time Sigil (once picked up) |
+| Left trigger | **Grapple**: pulls you in, tears an idle guard open |
+| Left stick press | Time Sigil (once picked up) |
 | Right trigger | Start / confirm / pick a card |
 | **Y** or left stick press | **Menu**: pause, settings, button map |
 | A / B | Stats panel / re-center |
@@ -101,7 +134,8 @@ Your HP and posture are on the strip under the enemy; a hit flashes the view red
 ## Tuning
 All feel values live in `src/core/config.ts`. Any of them can be overridden from the URL without a rebuild,
 e.g. `?perfectEarlyMs=150&perfectLateMs=50&iframesMs=400` (add `&preset=1` for the Lies of P–like preset, `&preset=2` for the Easy 250 ms accessibility preset;
-or pick Difficulty in the menu). `?hitStopMs=` tunes the enemy freeze on a perfect parry.
+or pick Difficulty in the menu). `?hitStopMs=` tunes the enemy freeze on a perfect parry (110 ms; rumble lasts as long).
+After the design consult: spam lockout 350 ms, posture-break stagger 2.5 s.
 The in-headset panel shows each guard's timing relative to the strike (negative = early) so tuning is data-driven.
 
 ## Reading a parry
@@ -161,13 +195,13 @@ and pull the trigger, or 1–6 on desktop). Your last picks are remembered and t
 |---|---|---|---|---|
 | Katana | 0.88 m | ×1 | ×1 | the baseline |
 | Odachi | 1.10 m | ×1.35 | ×1.5 | +20% parry posture damage |
-| Wakizashi | 0.60 m | ×0.75 | ×0.6 | +20 ms perfect window, +40% counter damage |
+| Wakizashi | 0.60 m | ×0.85 | ×0.6 | +20 ms perfect window, +40% counter damage |
 
 Relics are the boons Time Sigil, Keen Eye, Fleet Step, Vigor, Blood Deflect and Iron Wrist (`RELIC_IDS`).
 
 **Dodges:** the Duelist adds a thrust and the Sentinel a sweep, both glowing red, always named above
-him, and unblockable. Lean or side-dash (thrust), duck or back-dash (sweep) just before it lands; a clean dodge opens the same
-counter window as a perfect parry (gold ring, "DODGED · COUNTER NOW!") and flashes the edge of view blue.
+him, and unblockable. Lean or side-dash (thrust), duck or back-dash (sweep) after the chime; a perfect dodge
+(last 150 ms) opens the counter window (see *Dash and perfect dodge*).
 
 **Enemy body language:** he coils a little further back just before a swing commits, his torso
 twists into the windup and unwinds through the cut, and his blade reacts to how it went: a perfect

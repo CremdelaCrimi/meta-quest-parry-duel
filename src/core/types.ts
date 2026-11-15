@@ -122,7 +122,18 @@ export interface TimingConfig {
 
   enemyStaggerMs: number;
   iframesMs: number;
+  /** A dodge started within this long before the strike is a perfect dodge (counter + posture). */
+  perfectDodgeMs: number;
+  /** Posture a perfect dodge deals to him (half against a normal swing). */
+  perfectDodgePosture: number;
   dodgeCooldownMs: number;
+  /** Left-hand grapple: cooldown, your posture cost, his posture on a guard break, how long his guard
+   *  stays open, and the lockout after a miss or a grapple into a red attack. */
+  grappleCooldownMs: number;
+  grapplePlayerPosture: number;
+  grapplePostureDamage: number;
+  grappleGuardBreakMs: number;
+  grappleLockMs: number;
   counterWindowMs: number;
   /** Enemy freeze on a perfect parry (doubled when it breaks posture). Player and camera never freeze. */
   hitStopMs: number;
@@ -189,6 +200,10 @@ export interface FrameInput {
   ability: AbilityId | null;
   /** Dash started this frame (edge-triggered), or null. */
   dash?: DashDir | null;
+  /** He's too far away for his blade to reach you right now (footwork, decided by the game). */
+  outOfReach?: boolean;
+  /** Grapple fired this frame: did the wire hit him? */
+  grapple?: 'hit' | 'miss' | null;
   /**
    * Block button held at t1 (right grip). A guard only counts while it's held, so pressing it with
    * the sword already in place is a guard entry at that moment. Omitted = always held (no button).
@@ -214,7 +229,10 @@ export type DuelEventType =
   | 'abilityUsed'
   | 'wardAbsorb'
   /** Practice: HP ran out and was refilled instead of ending the fight. */
-  | 'practiceReset';
+  | 'practiceReset'
+  /** His strike landed while you were out of his reach. */
+  | 'whiff'
+  | 'grapple';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
@@ -246,4 +264,10 @@ export interface DuelEvent {
   opening?: boolean;
   /** On practiceReset: whose HP was refilled. */
   who?: 'player' | 'enemy';
+  /** On dodged: inside the perfect-dodge window. */
+  perfect?: boolean;
+  /** On hit: you dodged, but this long before the strike (ms), or with the wrong kind of dodge. */
+  dodgeEarlyMs?: number;
+  /** On grapple: what it did. */
+  grapple?: 'guardBreak' | 'pull' | 'backfire' | 'miss';
 }

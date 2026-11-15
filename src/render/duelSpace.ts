@@ -20,12 +20,15 @@ export class DuelSpace {
   calibrated = false;
   height = 1.6;
   readonly center = new THREE.Vector3();
+  /** Where the centre was at calibration: footwork positions are fixed relative to this. */
+  readonly calibCenter = new THREE.Vector3();
 
   calibrate(headPos: THREE.Vector3, headQuat: THREE.Quaternion): void {
     tmp.set(0, 0, -1).applyQuaternion(headQuat);
     const yaw = Math.atan2(tmp.x, tmp.z);
     this.height = headPos.y;
     this.center.set(headPos.x, headPos.y, headPos.z);
+    this.calibCenter.copy(this.center);
     this.group.position.copy(this.center);
     this.group.rotation.set(0, yaw, 0);
     this.group.updateMatrixWorld(true);
@@ -39,6 +42,26 @@ export class DuelSpace {
     this.center.z += (headPos.z - this.center.z) * k;
     this.group.position.set(this.center.x, this.height, this.center.z);
     this.group.updateMatrixWorld(true);
+  }
+
+  /**
+   * Where the (smoothed) centre is relative to the calibration spot, in duel coordinates. The
+   * centre trails the player's head (so leans read as leans); the enemy's footwork lives in the
+   * fixed calibration frame, so he no longer slides back when you step in.
+   */
+  centerOffset(out: V3): V3 {
+    tmp.copy(this.calibCenter);
+    this.group.worldToLocal(tmp);
+    out.x = tmp.x;
+    out.y = 0;
+    out.z = -tmp.z;
+    return out;
+  }
+
+  /** Fixed calibration-frame duel coordinates -> world (desktop mode places the head with this). */
+  fromCalib(v: V3, out: THREE.Vector3): THREE.Vector3 {
+    out.set(-v.x, v.y, v.z).applyQuaternion(this.group.quaternion);
+    return out.add(tmp.set(this.calibCenter.x, this.height, this.calibCenter.z));
   }
 
   /** World point -> core duel coordinates (relative to the smoothed centre). */

@@ -33,6 +33,8 @@ export interface TimelineData {
   perfectLate: number;
   blockLate: number;
   iframes: number;
+  /** Perfect-dodge window before the strike (ms). */
+  perfectDodge: number;
   /** Counter window opened by a perfect or a dodge: [from, from + ms] relative to the strike. */
   counter: [number, number] | null;
   /** Where the swing is now (ms relative to the strike), or null once it's over. */
@@ -106,8 +108,9 @@ export function drawTimeline(panel: CanvasPanel, d: TimelineData | null, idleTex
       zone(d.blockLate, d.after, gy, lh, 'rgba(255,80,80,0.35)', 'too late = hit', '#ffd0d0');
     } else {
       zone(-d.windup, -d.iframes, gy, lh, 'rgba(255,80,80,0.25)', 'too early', '#ffd0d0');
-      zone(-d.iframes, 0, gy, lh, GOLD, d.perilous === 'thrust' ? 'LEAN / SIDE DASH' : 'DUCK / BACK DASH');
-      zone(0, d.after, gy, lh, 'rgba(255,80,80,0.35)', 'too late', '#ffd0d0');
+      zone(-d.iframes, -d.perfectDodge, gy, lh, 'rgba(111,182,255,0.55)', 'safe', '#dce9ff');
+      zone(-d.perfectDodge, 0, gy, lh, GOLD, 'PERFECT');
+      zone(0, d.after, gy, lh, 'rgba(255,80,80,0.35)', d.perilous === 'thrust' ? 'too late · dodge SIDEWAYS' : 'too late · DUCK / BACK', '#ffd0d0');
     }
 
     // Strike lane: during his swing strikes land but you eat the hit unless you also block;

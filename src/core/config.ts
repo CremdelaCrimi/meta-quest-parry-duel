@@ -20,7 +20,7 @@ const BASE: Omit<TimingConfig, 'name'> = {
   steadyMaxSpeed: 1.2,
   spamWindowMs: 700,
   spamMaxEntries: 3,
-  spamLockoutMs: 450,
+  spamLockoutMs: 350, // VR hands micro-jitter: shorter than the 450 we started with
 
   blockHpMult: 0,
   blockPlayerPostureMult: 0.6,
@@ -34,11 +34,18 @@ const BASE: Omit<TimingConfig, 'name'> = {
   enemyPostureRegenPerSec: 6,
   postureRegenDelayMs: 1200,
 
-  enemyStaggerMs: 1600,
+  enemyStaggerMs: 2500, // time to step in for the finisher in VR
   iframesMs: 320,
+  perfectDodgeMs: 150,
+  perfectDodgePosture: 30,
+  grappleCooldownMs: 3000,
+  grapplePlayerPosture: 20,
+  grapplePostureDamage: 15,
+  grappleGuardBreakMs: 700,
+  grappleLockMs: 600,
   dodgeCooldownMs: 250,
   counterWindowMs: 700,
-  hitStopMs: 70, // reference: 50-100 ms starting guess, tune by feel
+  hitStopMs: 110, // heavier than the reference's 50-100 ms guess: the perfect needs to land like a hit
   assistAfterHits: 3,
   assistBonusMs: 40,
   windowBonusCapMs: 80,

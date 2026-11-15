@@ -92,6 +92,9 @@ export function drive(
     dashAt?: Array<[number, DashDir]>;
     /** Block button state over time (omit = no button, always held). */
     heldAt?: (t: number) => boolean;
+    /** Out of his reach over time. */
+    farAt?: (t: number) => boolean;
+    grappleAt?: Array<[number, 'hit' | 'miss']>;
   } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
@@ -104,6 +107,7 @@ export function drive(
   const strikes = [...(extra.strikeAt ?? [])];
   const abilities = [...(extra.abilityAt ?? [])];
   const dashes = [...(extra.dashAt ?? [])];
+  const grapples = [...(extra.grappleAt ?? [])];
   while (t < tEnd - 1e-9) {
     const t1 = t + dt;
     const cur = clone(poseAt(t1));
@@ -117,6 +121,8 @@ export function drive(
     if (abilities.length && abilities[0][0] <= t1) ability = abilities.shift()![1];
     let dash: DashDir | null = null;
     if (dashes.length && dashes[0][0] <= t1) dash = dashes.shift()![1];
+    let grapple: 'hit' | 'miss' | null = null;
+    if (grapples.length && grapples[0][0] <= t1) grapple = grapples.shift()![1];
     duel.step({
       t0: t,
       t1,
@@ -131,6 +137,8 @@ export function drive(
       ability,
       dash,
       blockHeld: extra.heldAt?.(t1),
+      outOfReach: extra.farAt?.(t1),
+      grapple,
     });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;
