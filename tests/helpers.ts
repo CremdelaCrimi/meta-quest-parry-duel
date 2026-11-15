@@ -97,6 +97,7 @@ export function drive(
     grappleAt?: Array<[number, 'hit' | 'miss']>;
     healAt?: number[];
     fatalAt?: number[];
+    blastHitAt?: number[];
   } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
@@ -112,6 +113,7 @@ export function drive(
   const grapples = [...(extra.grappleAt ?? [])];
   const heals = [...(extra.healAt ?? [])];
   const fatals = [...(extra.fatalAt ?? [])];
+  const blasts = [...(extra.blastHitAt ?? [])];
   while (t < tEnd - 1e-9) {
     const t1 = t + dt;
     const cur = clone(poseAt(t1));
@@ -129,6 +131,7 @@ export function drive(
     if (grapples.length && grapples[0][0] <= t1) grapple = grapples.shift()![1];
     const heal = !!heals.length && heals[0] <= t1 && !!heals.shift();
     const fatal = !!fatals.length && fatals[0] <= t1 && !!fatals.shift();
+    const blastHit = !!blasts.length && blasts[0] <= t1 && !!blasts.shift();
     duel.step({
       t0: t,
       t1,
@@ -147,6 +150,7 @@ export function drive(
       grapple,
       heal,
       fatal,
+      blastHit,
     });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;

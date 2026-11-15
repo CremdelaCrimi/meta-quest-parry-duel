@@ -148,6 +148,11 @@ export interface TimingConfig {
   grapplePostureDamage: number;
   grappleGuardBreakMs: number;
   grappleLockMs: number;
+  /** Blast shot (left arm): cooldown, damage and posture on hit. A hit during a normal windup
+   *  interrupts the swing (red attacks can't be interrupted). */
+  blastCooldownMs: number;
+  blastDamage: number;
+  blastPosture: number;
   counterWindowMs: number;
   /** Enemy freeze on a perfect parry (doubled when it breaks posture). Player and camera never freeze. */
   hitStopMs: number;
@@ -220,6 +225,9 @@ export interface FrameInput {
   grapple?: 'hit' | 'miss' | null;
   /** A drink from the flask finished this frame. */
   heal?: boolean;
+  /** Blast shot fired this frame (starts the cooldown), and a blast that reached him this frame. */
+  blastFire?: boolean;
+  blastHit?: boolean;
   /** Fatal Art button pressed this frame (left X). */
   fatal?: boolean;
   /**
@@ -252,7 +260,8 @@ export type DuelEventType =
   | 'whiff'
   | 'grapple'
   | 'heal'
-  | 'fatalArmed';
+  | 'fatalArmed'
+  | 'blast';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
@@ -290,6 +299,8 @@ export interface DuelEvent {
   dodgeEarlyMs?: number;
   /** On enemyHit / finisher: a Fatal Art. */
   heavy?: boolean;
+  /** On blast: it cut his swing short. */
+  interrupted?: boolean;
   /** On grapple: what it did. */
   grapple?: 'guardBreak' | 'pull' | 'backfire' | 'miss';
 }

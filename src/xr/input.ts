@@ -59,8 +59,8 @@ export interface InputFrame {
   leftSqueeze: number;
   /** Holding the healing gourd: left grip squeezed with the hand away from the sword handle. */
   flaskHeld: boolean;
-  /** Gourd at your mouth, tipped toward you: drinking. */
-  drinking: boolean;
+  /** Gourd raised above your head: healing (hold it up for the heal time). */
+  flaskRaised: boolean;
   /** Ward (B; desktop E) and Fatal Art (X; desktop X), edge-triggered. */
   ward: boolean;
   fatal: boolean;
@@ -78,8 +78,8 @@ export interface InputDevice {
   move(world: THREE.Vector3, duel: V3, ms: number): void;
 }
 
-/** The gourd counts as at your mouth within this distance (m) of it, tipped toward you. */
-const MOUTH_M = 0.25;
+/** Raise the gourd this far (m) above your eyes to heal. */
+const HEAL_RAISE_M = 0.08;
 /** A dash never takes you further than this from where you started (m), so you stay in the arena. */
 const MAX_TRAVEL_M = 2.5;
 
@@ -114,7 +114,7 @@ function emptyFrame(): InputFrame {
     leftDir: new THREE.Vector3(0, 0, -1),
     leftSqueeze: 0,
     flaskHeld: false,
-    drinking: false,
+    flaskRaised: false,
     ward: false,
     fatal: false,
     choose: -1,
@@ -271,12 +271,9 @@ export class XRInput implements InputDevice {
       // Flask: grip squeezed away from the handle (near the handle, the same squeeze is the two-hand grip).
       const nearHandle = f.hasSword && f.leftPos.distanceTo(this.sword.axisPoint(LEFT_GRIP_SPOT_M, this.spot)) < HINT_M;
       f.flaskHeld = lg && !f.twoHanded && !nearHandle;
-      const mouth = this.v.copy(f.headPos).add(this.mouthOff.set(0, -0.08, 0));
-      const toMouth = mouth.sub(f.leftPos);
-      const dist = toMouth.length();
-      f.drinking = f.flaskHeld && dist < MOUTH_M && f.leftDir.dot(toMouth.normalize()) > 0.3;
+      f.flaskRaised = f.flaskHeld && f.leftPos.y > f.headPos.y + HEAL_RAISE_M;
     } else {
-      f.flaskHeld = f.drinking = false;
+      f.flaskHeld = f.flaskRaised = false;
     }
     f.select = (rt && !pv.rt) || (a && !pv.a);
     f.blockHeld = rg;
@@ -365,8 +362,6 @@ export class XRInput implements InputDevice {
       this.pulse('left', 0.25, 25);
     }
   }
-
-  private readonly mouthOff = new THREE.Vector3();
 
   /** Dash or pull: slide the player by `world` over `ms` (a dash moves exactly as long as its i-frames). */
   move(world: THREE.Vector3, _duel: V3, ms: number): void {
@@ -515,7 +510,7 @@ export class DesktopInput implements InputDevice {
     f.ward = pk.has('e');
     f.fatal = pk.has('x');
     f.flaskHeld = this.keys.has('v');
-    f.drinking = f.flaskHeld;
+    f.flaskRaised = f.flaskHeld;
     f.leftSqueeze = f.flaskHeld ? 1 : 0;
     if (pk.has('g')) f.twoHanded = !f.twoHanded; // desktop stand-in for the left hand on the handle
     this.sword.setGrip(f.twoHanded, 0);

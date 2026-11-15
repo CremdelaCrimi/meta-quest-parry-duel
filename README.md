@@ -50,10 +50,12 @@ deliberate footwork (`src/core/footwork.ts`, from the design consult in `docs/de
 | stands and takes it | you're inside during his recovery | then a fast 0.8 m backstep (4 m/s) |
 | stumbles toward you | his posture breaks | 0.4 m, so short blades reach the finisher |
 
+Only contact makes a sound: a swing that falls short shows TOO FAR silently.
+
 **Your reach** is arm (0.55 m) + blade + his body (0.27 m): katana 1.70 m, odachi 1.92 m, wakizashi
 1.42 m. At his home distance you have to step or dash in. A **floor arc** in front of you marks your
-reach and turns green when he's inside it (menu → Reach marker). A fast swing that falls short plays
-a whoosh, flashes your trail white and says **TOO FAR · N cm short**. **His reach** is 1.75 m after
+reach and turns green when he's inside it (menu → Reach marker). A fast swing that falls short
+flashes your trail white and says **TOO FAR · N cm short**. **His reach** is 1.75 m after
 his lunge: be further than that when his blade lands and he misses ("OUT OF HIS REACH"). In training
 the coach shows the live distance and both reaches.
 
@@ -84,14 +86,17 @@ dodge lane shows too early / safe / PERFECT / too late.
 
 ## Flask (left grip, away from the sword)
 Squeeze the **left grip with your hand away from the sword handle** and a gourd appears in your left
-hand. Raise it to your mouth, tipped toward you, and hold it there for **1 s** to drink: +35 HP, 3 drinks
-per fight (unlimited in training). You **can't attack while holding it**, a hit interrupts the drink,
-and you lower it before drinking again. The wrist panel shows the drink filling. Desktop: hold V.
+hand. **Raise it above your head** and hold it there for 0.5 s: it bursts into light, golden rings sweep
+up around you, +35 HP. 3 per fight (unlimited in training). You **can't attack while holding it**, a hit
+interrupts the heal, and you lower it before healing again. Heal time is on the Tuning page (0 = heal
+the instant you raise it). Desktop: hold V.
 
 ## Fatal Art (X)
 Perfect parries (+25), perfect dodges (+25) and strikes he deflects (+5) fill the Fatal Art meter.
-At 100% press **X** (desktop: X): your blade burns red and your next strike within 2.5 s is a heavy hit,
-×4 damage and 40 posture, straight through his guard, with a short freeze. When his posture is broken,
+At 100% a red prompt beside him says **X · FATAL ART**. Press X (desktop: X): your blade burns red, the
+prompt changes to **SWING THROUGH HIM** and a red cut glows across his chest showing the swing to make.
+Your next strike within 2.5 s is a heavy hit, ×4 damage and 40 posture, straight through his guard,
+with a short freeze. When he's broken the prompt reads **X · FINISH HIM**. When his posture is broken,
 **X is the finisher at once**, no swing needed. While broken he's bent over and swaying, blade hanging.
 
 ## HUD
@@ -107,8 +112,17 @@ Every row steps a number and saves it at once (`parryDuel.settings`): dash i-fra
 distance, cooldown, perfect dodge window, lean/duck i-frames, perfect parry early/late, parry freeze,
 grapple cooldown, drink time, heal per drink, Fatal Art armed time, and Reset all to defaults.
 
+## Left arm (left trigger): grapple or blast
+Pick the arm in the menu (**Left arm**). By default it fires at the enemy you're locked on to, no aiming
+needed; menu → **Left arm aim → Point** fires where your left hand points instead and draws an **aim
+line** that turns gold when it's on him.
+- **Blast shot:** a bolt that flies at him (14 m/s, 6 m range): 6 damage and 25 posture, and if he's
+  winding up a normal swing it **interrupts it** (he flinches back to idle). Red attacks power through.
+  4 s cooldown (Tuning).
+- **Grapple:** below.
+
 ## Grapple (left trigger)
-Point your left hand at him and pull the **left trigger** (desktop: F). A wire (3.5 m range) pulls you
+Pull the **left trigger** (desktop: F) with the grapple selected. A wire (3.5 m range) pulls you
 0.5 m toward him (never closer than 1.2 m). Against an idle enemy it also **tears his guard open** for
 0.7 s (every strike lands) and deals 15 posture. It costs 20 of your posture and has a 3 s cooldown. A
 miss, or grappling into a red attack, locks your strikes and perfects for 0.6 s. (Time Sigil moved to

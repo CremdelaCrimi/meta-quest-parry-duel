@@ -19,13 +19,17 @@ export interface Settings {
   reachMarker: boolean;
   /** Lock-on reticle on his chest. */
   lockOn: boolean;
+  /** What the left trigger fires. */
+  leftArm: 'grapple' | 'blast';
+  /** Left-arm aiming: at the locked-on enemy automatically, or where your left hand points (with an aim line). */
+  armAim: 'lockon' | 'point';
   /** Tuning editor overrides (menu → Tuning): timing fields and game-side values, by name. */
   tuning: Record<string, number>;
 }
 
 const KEY = 'parryDuel.settings';
 
-export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true, lockOn: true, tuning: {} };
+export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true, lockOn: true, leftArm: 'grapple', armAim: 'lockon', tuning: {} };
 
 export function loadSettings(): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };

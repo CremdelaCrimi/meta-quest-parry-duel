@@ -77,6 +77,7 @@ export class Duel {
     hitStopUntil: -Infinity,
     abilityReadyAt: { slowTime: 0, ward: 0 } as Record<AbilityId, number>,
     grappleReadyAt: 0,
+    blastReadyAt: 0,
     flasks: 0,
     /** Fatal Art meter, 0-100. */
     fatalMeter: 0,
@@ -255,6 +256,8 @@ export class Duel {
     if (inp.dash) this.onDodge({ kind: DASH_KIND[inp.dash], t: inp.t0 });
     if (inp.grapple) this.onGrapple(inp.grapple, inp.t0);
     if (inp.heal) this.drink(inp.t0);
+    if (inp.blastFire && inp.t0 >= this.player.blastReadyAt) this.player.blastReadyAt = inp.t0 + this.cfg.blastCooldownMs;
+    if (inp.blastHit) this.onBlast(inp.t0);
     if (inp.fatal) this.onFatal(inp.t0);
     this.outOfReach = !!inp.outOfReach;
 
@@ -561,6 +564,27 @@ export class Duel {
     }
     this.emit({ type: 'grapple', t, grapple: what });
     if (e.posture >= e.def.postureMax && e.state !== 'stagger') this.breakEnemy(t);
+  }
+
+  /**
+   * Blast shot lands: chip damage and posture; during a normal windup it interrupts the swing (he
+   * flinches back to idle). Red attacks power through.
+   */
+  private onBlast(t: number): void {
+    const e = this.enemy;
+    const c = this.cfg;
+    if (e.state === 'dead') return;
+    e.hp -= c.blastDamage;
+    e.posture += c.blastPosture;
+    e.postureHitAt = t;
+    const att = this.currentAttack;
+    const interrupted = !!att && !e.struck && att.perilous === 'none';
+    if (interrupted) {
+      this.pending = null;
+      this.toIdle(e.clock, 700);
+    }
+    this.emit({ type: 'blast', t, damage: c.blastDamage, interrupted });
+    if (!this.checkEnemyDead(t) && e.posture >= e.def.postureMax && e.state !== 'stagger') this.breakEnemy(t);
   }
 
   private gainFatal(n: number): void {

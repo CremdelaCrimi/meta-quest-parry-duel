@@ -20,7 +20,7 @@ import { DRILLS, DUMMY_MODES, DUMMY_SPEEDS, dummyDef } from './core/training';
 import type { DummyMode } from './core/training';
 import { TRAIN_COLORS, drawCoach, drawTimeline } from './render/trainingPanels';
 import type { TimelineData } from './render/trainingPanels';
-import { drawChipRow } from './render/leftHand';
+import { HealAura, drawChipRow } from './render/leftHand';
 import type { AbilityChip, LeftHandView } from './render/leftHand';
 import type { MenuItem } from './render/pauseMenu';
 import { headsetName, loadSettings, resolveQuality, saveSettings } from './settings';
@@ -49,10 +49,10 @@ const MODE_OFFERS: Offer[] = [
 const TUNE_DEFAULTS: Record<string, number> = {
   dashDistM: 0.8,
   dashCooldownMs: 450,
-  healMs: 1000,
+  healMs: 500,
 };
 /** Which tuning keys are TimingConfig fields (the rest are TUNE_DEFAULTS). */
-const TIMING_TUNE_KEYS = ['dashIframesMs', 'iframesMs', 'perfectDodgeMs', 'perfectEarlyMs', 'perfectLateMs', 'hitStopMs', 'grappleCooldownMs', 'healAmount', 'fatalArmMs'];
+const TIMING_TUNE_KEYS = ['blastCooldownMs', 'dashIframesMs', 'iframesMs', 'perfectDodgeMs', 'perfectEarlyMs', 'perfectLateMs', 'hitStopMs', 'grappleCooldownMs', 'healAmount', 'fatalArmMs'];
 /** His blade reaches you while you're within this distance of his body (m, after his lunge). */
 const ENEMY_REACH = 1.75;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -64,6 +64,10 @@ const GRAPPLE_RANGE_M = 3.5;
 const GRAPPLE_AIM_M = 0.45;
 const GRAPPLE_PULL_M = 0.5;
 const GRAPPLE_STOP_GAP_M = 1.2;
+/** Blast shot: speed (m/s), range (m), and how close it must pass his body to hit (m). */
+const BLAST_SPEED = 14;
+const BLAST_RANGE_M = 6;
+const BLAST_HIT_M = 0.3;
 
 function loadLoadout(): Loadout {
   try {
@@ -207,6 +211,28 @@ export class Game {
     g.traverse((o) => (o.renderOrder = 18)); // children: Group.renderOrder doesn't reach them (menu draws at 20)
     return g;
   })();
+  /** Heal: golden rings sweeping up around you. */
+  private readonly healAura = new HealAura();
+  /** Point-aim mode: a line from your left hand showing where the arm will go (gold = on target). */
+  private readonly aimLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
+  );
+  /** Blast projectile in flight. */
+  private readonly blast = {
+    alive: false,
+    homing: true,
+    traveled: 0,
+    pos: new THREE.Vector3(),
+    dir: new THREE.Vector3(),
+    mesh: new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshBasicMaterial({ color: 0x8fd8ff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })),
+  };
+  private blastHitPending = false;
+  /** Fatal Art: what to do (above his shoulder) and the cut to make (a red slash across his chest). */
+  private readonly fatalPrompt = new CanvasPanel(768, 200, 0.5);
+  private fatalPromptKey = '';
+  private readonly slashMat = new THREE.MeshBasicMaterial({ color: 0xff2a10, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+  private readonly slash = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.07), this.slashMat);
   /** Grapple wire, shown for a moment from the left hand. */
   private readonly wire = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
@@ -275,7 +301,13 @@ export class Game {
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
     this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
-    scene.add(this.wire, this.lockOn);
+    scene.add(this.wire, this.lockOn, this.healAura.group, this.aimLine, this.blast.mesh);
+    this.space.group.add(this.fatalPrompt.mesh, this.slash);
+    this.aimLine.visible = false;
+    this.aimLine.frustumCulled = false;
+    this.blast.mesh.visible = false;
+    this.fatalPrompt.mesh.visible = false;
+    this.slash.renderOrder = 16;
     this.wire.visible = false;
     this.wire.frustumCulled = false;
     this.reachArc.renderOrder = 5;
@@ -389,6 +421,9 @@ export class Game {
     this.updateOrbit(t);
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
     this.updateLockOn(f.headPos);
+    this.healAura.update(dt);
+    this.updateAimLine(f);
+    this.updateFatalPrompt(t);
     if (this.leftHand) {
       this.leftHand.update(f.leftSqueeze, f.flaskHeld, this.drinkMs / this.tune('healMs'), dt);
       if (t >= this.wristAt) {
@@ -516,21 +551,29 @@ export class Game {
     if (useBtn && f.blockHeld && !this.blockWas) this.input.pulse('right', 0.15, 12);
     this.blockWas = useBtn && f.blockHeld;
 
-    // Grapple: left trigger fires a wire where the left hand points (desktop: always at him).
+    // Left arm (left trigger): grapple or blast, aimed at the locked-on enemy (or where the hand points).
     let grapple: 'hit' | 'miss' | null = null;
-    if (f.grapple && this.phase === 'fight' && t >= this.duel.player.grappleReadyAt && this.duel.enemy.state !== 'dead') {
+    let blastFire = false;
+    const pl = this.duel.player;
+    const lockAim = this.settings.armAim === 'lockon' || !this.isXR;
+    const handPos = this.isXR ? f.leftPos : this.tmp3.copy(f.headPos).add(this.tmp4.set(-0.2, -0.35, 0));
+    if (f.grapple && this.phase === 'fight' && this.duel.enemy.state !== 'dead') {
       const chest = this.enemyView.chestWorld(this.space, this.tmp);
-      let hit: boolean;
-      if (this.isXR) {
-        const end = this.tmp2.copy(f.leftDir).multiplyScalar(GRAPPLE_RANGE_M).add(f.leftPos);
-        hit = this.enemyView.bodyDist(f.leftPos, end, this.space) < GRAPPLE_AIM_M && f.leftPos.distanceTo(chest) < GRAPPLE_RANGE_M;
-      } else hit = this.gapNow < GRAPPLE_RANGE_M;
-      grapple = hit ? 'hit' : 'miss';
-      const to = hit ? chest : this.tmp2.copy(f.leftDir).multiplyScalar(GRAPPLE_RANGE_M).add(f.leftPos);
-      this.showWire(this.isXR ? f.leftPos : this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.35, 0)), to);
-      this.sfx.play('grapple');
-      this.input.pulse('left', 0.7, 60);
+      if (this.settings.leftArm === 'blast') {
+        if (t >= pl.blastReadyAt && !this.blast.alive) {
+          blastFire = true;
+          this.fireBlast(handPos, lockAim ? this.tmp2.copy(chest).sub(handPos).normalize() : f.leftDir, lockAim);
+        }
+      } else if (t >= pl.grappleReadyAt) {
+        const hit = lockAim ? this.gapNow < GRAPPLE_RANGE_M : this.pointsAt(f.leftPos, f.leftDir, GRAPPLE_RANGE_M, GRAPPLE_AIM_M);
+        grapple = hit ? 'hit' : 'miss';
+        const to = hit ? chest : this.tmp2.copy(f.leftDir).multiplyScalar(GRAPPLE_RANGE_M).add(handPos);
+        this.showWire(handPos, to);
+        this.sfx.play('grapple');
+        this.input.pulse('left', 0.7, 60);
+      }
     }
+    this.updateBlast(dt);
 
     let ability: AbilityId | null = null;
     if (f.sigil) ability = 'slowTime';
@@ -540,7 +583,7 @@ export class Game {
     let heal = false;
     const p = this.duel.player;
     const canDrink = p.flasks > 0 || this.training;
-    if (f.drinking && canDrink && !this.drinkLatch && this.phase === 'fight') {
+    if (f.flaskRaised && canDrink && !this.drinkLatch && this.phase === 'fight') {
       this.drinkMs += dt;
       if (this.drinkMs >= this.tune('healMs')) {
         heal = true;
@@ -549,7 +592,7 @@ export class Game {
       }
     } else {
       this.drinkMs = Math.max(0, this.drinkMs - dt * 2);
-      if (!f.drinking) this.drinkLatch = false;
+      if (!f.flaskRaised) this.drinkLatch = false;
     }
 
     this.duel.step({
@@ -570,6 +613,8 @@ export class Game {
       grapple,
       heal,
       fatal: f.fatal && this.phase === 'fight',
+      blastFire,
+      blastHit: this.consumeBlastHit(),
     });
     if (f.fatal && this.phase === 'fight' && p.fatalMeter < 100 && this.duel.enemy.state !== 'stagger') {
       this.flashResult(`Fatal Art at ${Math.floor(p.fatalMeter)}%: perfect parries and dodges fill it`, COLORS.info, t);
@@ -755,11 +800,18 @@ export class Game {
         this.showBanner('DEATH', COLORS.hit, `Reached fight ${this.run.fight + 1}. Trigger for a new run`);
         break;
       case 'heal':
-        this.sfx.play('ui');
-        this.waves.emit(this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.3, 0)), 0x60ff9a, 0.6, 500);
-        this.input.pulse('left', 0.5, 120);
+        this.sfx.play('perfect', 0.5);
+        this.healAura.emit(f.headPos, 0);
+        this.sparks.burst(this.isXR ? f.leftPos : f.headPos, 0xffd060, 30, 1.6); // the gourd bursts into light
+        this.input.pulse('left', 0.6, 150);
         this.flashResult(`HEALED +${Math.round(ev.damage ?? 0)}`, COLORS.open, t);
         this.statusAt = 0;
+        break;
+      case 'blast':
+        this.sfx.play('block', 0.9);
+        this.sfx.play('strike');
+        this.enemyView.hit();
+        this.flashResult(ev.interrupted ? 'BLAST · swing interrupted!' : 'BLAST', ev.interrupted ? COLORS.open : COLORS.block, t);
         break;
       case 'fatalArmed':
         this.sfx.play('peril');
@@ -902,8 +954,7 @@ export class Game {
 
   /** A swing that fell short: whoosh, a white trail flash, and how far short. */
   private whiff(shortM: number, t: number): void {
-    this.whiffAt = t + 600;
-    this.sfx.play('whoosh');
+    this.whiffAt = t + 600; // no sound: only contact makes noise
     this.trailWhiffT = 1;
     this.flashResult(`TOO FAR · ${Math.max(1, Math.round(shortM * 100))} cm short`, COLORS.info, t);
     if (this.training) this.trainStats.whiffs++;
@@ -916,6 +967,117 @@ export class Game {
     const step = { x: 0, y: 0, z: pull };
     DuelSpace.toLocal(step, this.tmp3).applyQuaternion(this.space.group.quaternion);
     this.input.move(this.tmp3, step, 200);
+  }
+
+  /** Does a ray from `from` along `dir` pass within `r` of his body, inside `range`? */
+  private pointsAt(from: THREE.Vector3, dir: THREE.Vector3, range: number, r: number): boolean {
+    const end = this.tmp4.copy(dir).multiplyScalar(range).add(from);
+    return this.enemyView.bodyDist(from, end, this.space) < r;
+  }
+
+  private fireBlast(from: THREE.Vector3, dir: THREE.Vector3, homing: boolean): void {
+    const b = this.blast;
+    b.alive = true;
+    b.homing = homing;
+    b.traveled = 0;
+    b.pos.copy(from);
+    b.dir.copy(dir).normalize();
+    b.mesh.visible = true;
+    b.mesh.position.copy(from);
+    this.sfx.play('grapple', 0.7);
+    this.input.pulse('left', 0.8, 50);
+  }
+
+  /** Fly the blast; lock-on shots home in on his chest. A hit is handed to the sim next step. */
+  private updateBlast(dt: number): void {
+    const b = this.blast;
+    if (!b.alive) return;
+    const step = (BLAST_SPEED * dt) / 1000;
+    if (b.homing) b.dir.copy(this.enemyView.chestWorld(this.space, this.tmp4)).sub(b.pos).normalize();
+    const prev = this.tmp2.copy(b.pos);
+    b.pos.addScaledVector(b.dir, step);
+    b.traveled += step;
+    b.mesh.position.copy(b.pos);
+    b.mesh.scale.setScalar(1 + 0.2 * Math.sin(b.traveled * 40));
+    if (this.enemyView.bodyDist(prev, b.pos, this.space) < BLAST_HIT_M) {
+      this.blastHitPending = true;
+      this.sparks.burst(b.pos, 0x8fd8ff, 30, 2);
+      this.waves.emit(b.pos, 0x8fd8ff, 0.45, 300);
+      b.alive = false;
+    } else if (b.traveled > BLAST_RANGE_M) {
+      b.alive = false;
+    }
+    b.mesh.visible = b.alive;
+  }
+
+  private consumeBlastHit(): boolean {
+    const h = this.blastHitPending;
+    this.blastHitPending = false;
+    return h;
+  }
+
+  /** Point-aim mode: show where the left arm will go; gold when it's on him. */
+  private updateAimLine(f: InputDevice['frame']): void {
+    const show = this.isXR && this.settings.armAim === 'point' && this.phase === 'fight' && !f.flaskHeld && this.duel.enemy.state !== 'dead';
+    this.aimLine.visible = show;
+    if (!show) return;
+    const range = this.settings.leftArm === 'blast' ? BLAST_RANGE_M : GRAPPLE_RANGE_M;
+    const on = this.pointsAt(f.leftPos, f.leftDir, range, this.settings.leftArm === 'blast' ? BLAST_HIT_M + 0.1 : GRAPPLE_AIM_M);
+    const end = this.tmp2.copy(f.leftDir).multiplyScalar(range).add(f.leftPos);
+    const pos = this.aimLine.geometry.getAttribute('position') as THREE.BufferAttribute;
+    pos.setXYZ(0, f.leftPos.x, f.leftPos.y, f.leftPos.z);
+    pos.setXYZ(1, end.x, end.y, end.z);
+    pos.needsUpdate = true;
+    const m = this.aimLine.material as THREE.LineBasicMaterial;
+    m.color.setHex(on ? 0xffd040 : 0xffffff);
+    m.opacity = on ? 0.9 : 0.3;
+  }
+
+  /**
+   * Fatal Art prompt: tells you the button when it's ready, and once armed shows the cut to make, a
+   * red slash across his chest, so you know to swing through him.
+   */
+  private updateFatalPrompt(t: number): void {
+    const d = this.duel;
+    const p = d.player;
+    const e = d.enemy;
+    const fighting = this.phase === 'fight' && e.state !== 'dead';
+    const armed = d.time <= p.fatalArmedUntil;
+    const broken = e.state === 'stagger';
+    const ready = p.fatalMeter >= 100;
+    const key = !fighting ? '' : broken ? 'broken' : armed ? 'armed' : ready ? 'ready' : '';
+    this.fatalPrompt.mesh.visible = key !== '';
+    const ev = this.enemyView;
+    const chestZ = ENEMY_DIST + ev.footZ - ev.lunge - 0.3;
+    place(this.fatalPrompt.mesh, { x: ev.footX + 0.55, y: -0.05, z: chestZ });
+    // The slash: upper right to lower left across his chest, pulsing.
+    const showSlash = fighting && (armed || broken);
+    this.slash.visible = showSlash;
+    if (showSlash) {
+      DuelSpace.toLocal({ x: ev.footX, y: -this.space.height + 1.2, z: chestZ }, this.slash.position);
+      this.slash.rotation.set(0, Math.PI, 0.75);
+      this.slashMat.opacity = 0.75 + 0.25 * Math.sin(t / 90);
+    }
+    if (key === this.fatalPromptKey) return;
+    this.fatalPromptKey = key;
+    if (!key) return;
+    const btn = 'X';
+    const [title, sub] =
+      key === 'broken' ? [`${btn} · FINISH HIM`, 'or strike him: he can\'t defend'] : key === 'armed' ? ['SWING THROUGH HIM', 'follow the red cut · heavy hit'] : [`${btn} · FATAL ART`, 'ready: arms a heavy strike'];
+    this.fatalPrompt.draw((ctx, w, h) => {
+      ctx.fillStyle = 'rgba(30,6,6,0.85)';
+      roundRect(ctx, 0, 0, w, h, 26);
+      ctx.fill();
+      ctx.strokeStyle = '#ff5050';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      ctx.fillStyle = '#ff6a5a';
+      ctx.font = '800 64px system-ui, sans-serif';
+      ctx.fillText(title, 32, 88);
+      ctx.fillStyle = '#ffd8d0';
+      ctx.font = '600 36px system-ui, sans-serif';
+      ctx.fillText(sub, 32, 152);
+    });
   }
 
   /** Tuning value: an override from the menu's Tuning page, else the default. */
@@ -989,7 +1151,12 @@ export class Game {
     const g = cd(p.grappleReadyAt, this.timing.grappleCooldownMs);
     const fatalArmed = now <= p.fatalArmedUntil;
     const chips: AbilityChip[] = [
-      { key: xr ? 'LT' : 'F', name: 'Grapple', ready: g[0], text: g[1], color: '#d8c08a' },
+      this.settings.leftArm === 'blast'
+        ? (() => {
+            const b = cd(p.blastReadyAt, this.timing.blastCooldownMs);
+            return { key: xr ? 'LT' : 'F', name: 'Blast', ready: b[0], text: b[1], color: '#8fd8ff' };
+          })()
+        : { key: xr ? 'LT' : 'F', name: 'Grapple', ready: g[0], text: g[1], color: '#d8c08a' },
       {
         key: xr ? 'GRIP' : 'V',
         name: 'Flask',
@@ -1193,7 +1360,7 @@ export class Game {
       this.coach,
       `TRAINING · ${this.dummyName().toUpperCase()} · ${DUMMY_SPEEDS[this.speedIdx].name}`,
       this.coachLines(),
-      this.isXR ? 'R-stick ←→ dummy · L-stick flick dash · L-trigger grapple · Y menu' : 'T dummy · arrows dash · F grapple · M menu',
+      this.isXR ? 'R-stick ←→ dummy · L-stick flick dash · L-trigger left arm · Y menu' : 'T dummy · arrows dash · F left arm · M menu',
     );
   }
 
@@ -1318,6 +1485,24 @@ export class Game {
       },
       { label: 'Tuning', hint: () => 'Dash, dodge, parry, flask numbers (saved)', act: () => this.pause.openSub('TUNING', this.tuningRows()) },
       {
+        label: 'Left arm',
+        value: () => (s.leftArm === 'blast' ? 'Blast shot' : 'Grapple'),
+        hint: () => (s.leftArm === 'blast' ? 'Left trigger: a shot that interrupts his normal swings' : 'Left trigger: pull yourself in, tear his guard open'),
+        change: () => {
+          s.leftArm = s.leftArm === 'blast' ? 'grapple' : 'blast';
+          save();
+        },
+      },
+      {
+        label: 'Left arm aim',
+        value: () => (s.armAim === 'point' ? 'Point (aim line)' : 'Lock-on'),
+        hint: () => (s.armAim === 'point' ? 'Goes where your left hand points; line turns gold on target' : 'Always goes to the enemy you are locked on to'),
+        change: () => {
+          s.armAim = s.armAim === 'point' ? 'lockon' : 'point';
+          save();
+        },
+      },
+      {
         label: 'Lock-on marker',
         value: () => onOff(s.lockOn),
         change: () => {
@@ -1434,7 +1619,8 @@ export class Game {
       num('perfectLateMs', 'Perfect parry: late', 5, 0, 120, 'ms', () => 'How late after the hit'),
       num('hitStopMs', 'Parry freeze (hit-stop)', 10, 0, 250, 'ms', () => 'Enemy freeze on a perfect; rumble matches'),
       num('grappleCooldownMs', 'Grapple cooldown', 250, 500, 10000, 'ms', () => 'Left trigger'),
-      num('healMs', 'Drink time', 100, 300, 3000, 'ms', () => 'Gourd held at your mouth this long'),
+      num('healMs', 'Heal time', 50, 0, 3000, 'ms', () => 'Gourd held above your head this long'),
+      num('blastCooldownMs', 'Blast cooldown', 250, 500, 10000, 'ms', () => 'Left arm: blast shot'),
       num('healAmount', 'Heal per drink', 5, 5, 100, 'HP', () => 'Flasks per fight: 3'),
       num('fatalArmMs', 'Fatal Art armed time', 250, 500, 6000, 'ms', () => 'How long X keeps your strike heavy'),
       {
@@ -1675,7 +1861,7 @@ export class Game {
       line(xr ? 'LEFT HAND: squeeze grip on the handle = two hands' : 'G: two-handed grip', '700 32px system-ui, sans-serif', '#ffd060', 38);
       line('Steadier blocks, harder hits, slower. One hand: quick + pokes.', '500 27px system-ui, sans-serif', '#d8dce4', 50);
       line(
-        xr ? 'Y = MENU (every button) · L-stick flick = DASH · L-trigger = GRAPPLE' : 'M = MENU (every key) · arrows = DASH · F = GRAPPLE',
+        xr ? 'Y = MENU (every button) · L-stick flick = DASH · L-trigger = LEFT ARM' : 'M = MENU (every key) · arrows = DASH · F = LEFT ARM',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,

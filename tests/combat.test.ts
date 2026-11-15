@@ -475,6 +475,25 @@ describe('flask and Fatal Art', () => {
   });
 });
 
+describe('blast shot', () => {
+  it('a blast during his windup interrupts the swing', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    const evs = drive(d, () => POSES.neutral, 2200, 90, { blastHitAt: [START + 300] });
+    expect(evs.find((e) => e.type === 'blast')?.interrupted).toBe(true);
+    expect(outcome(evs)).toBeUndefined(); // the swing never lands
+    expect(d.player.hp).toBe(PRESET_SEKIRO_LIKE.playerHp);
+  });
+
+  it('a red attack powers through a blast', () => {
+    const d = makeDuel();
+    script(d, ATTACKS.thrust, START);
+    const evs = drive(d, () => POSES.neutral, 2500, 90, { blastHitAt: [START + 300] });
+    expect(evs.find((e) => e.type === 'blast')?.interrupted).toBe(false);
+    expect(outcome(evs)?.type).toBe('hit');
+  });
+});
+
 describe('training dummy', () => {
   it('without a guard every idle strike lands', () => {
     const d = makeDuel({ guards: false });

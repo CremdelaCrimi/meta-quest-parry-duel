@@ -218,8 +218,8 @@ export class PauseMenu {
           ['Y', 'MENU (this screen)', GOLD],
           ['X', 'FATAL ART (meter full / he is broken)', '#ff5050'],
           ['Stick', 'Flick: DASH that way · press: Time Sigil', '#60c0ff'],
-          ['Trigger', 'GRAPPLE: point at him, pulls you in', '#d8c08a'],
-          ['Grip', 'On handle: two hands · away: FLASK', '#ffd060'],
+          ['Trigger', 'LEFT ARM: grapple or blast (menu)', '#d8c08a'],
+          ['Grip', 'On handle: 2 hands · away: FLASK, raise up', '#ffd060'],
         ]);
         controller(ctx, 260, 700, 'R', [
           ['B', 'Ward: absorb next hit · menu: back', '#6fb6ff'],
@@ -237,9 +237,9 @@ export class PauseMenu {
           ['Arrows', 'Dash left / right / toward / away'],
           ['T', 'Switch training dummy'],
           ['E', 'Ward: absorb next hit'],
-          ['X / hold V', 'Fatal Art · drink from the flask'],
+          ['X / hold V', 'Fatal Art · heal (flask raised)'],
           ['Q', 'Time Sigil (once picked up)'],
-          ['F', 'Grapple: pull yourself in'],
+          ['F', 'Left arm: grapple or blast'],
           ['G', 'Two-handed grip'],
           ['1–6', 'Pick a card'],
           ['H', 'Stats panel'],

@@ -54,6 +54,9 @@ const BASE: Omit<TimingConfig, 'name'> = {
   grapplePostureDamage: 15,
   grappleGuardBreakMs: 700,
   grappleLockMs: 600,
+  blastCooldownMs: 4000,
+  blastDamage: 6,
+  blastPosture: 25,
   dodgeCooldownMs: 250,
   counterWindowMs: 700,
   hitStopMs: 110, // heavier than the reference's 50-100 ms guess: the perfect needs to land like a hit
