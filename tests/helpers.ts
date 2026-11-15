@@ -1,7 +1,7 @@
 import { DEFAULT_GUARD, PRESET_SEKIRO_LIKE, defaultModifiers } from '../src/core/config';
 import { lerpPose, makePose } from '../src/core/guard';
 import { Duel } from '../src/core/sim';
-import type { AttackDef, DuelEvent, EnemyDef, StrikeZone, SwordPose, TimingConfig, V3 } from '../src/core/types';
+import type { AttackDef, DashDir, DuelEvent, EnemyDef, StrikeZone, SwordPose, TimingConfig, V3 } from '../src/core/types';
 
 const P = (hx: number, hy: number, hz: number, tx: number, ty: number, tz: number): SwordPose => ({
   hilt: { x: hx, y: hy, z: hz },
@@ -30,7 +30,9 @@ export const TEST_ENEMY: EnemyDef = {
  * Test duel. Steadiness is off unless `steady: true`, so timing tests (whose scripted guards
  * snap into place just before the strike) measure timing alone; steadiness has its own tests.
  */
-export function makeDuel(opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number; steady?: boolean } = {}): Duel {
+export function makeDuel(
+  opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number; steady?: boolean; guards?: boolean; practice?: boolean } = {},
+): Duel {
   const timing = opts.timing ?? PRESET_SEKIRO_LIKE;
   return new Duel({
     timing: opts.steady ? timing : { ...timing, steadyMs: 0 },
@@ -39,6 +41,8 @@ export function makeDuel(opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: b
     mods: defaultModifiers(),
     seed: opts.seed ?? 1,
     ai: opts.ai ?? false,
+    guards: opts.guards,
+    practice: opts.practice,
   });
 }
 
@@ -85,6 +89,7 @@ export function drive(
     poke?: boolean;
     twoHanded?: boolean;
     abilityAt?: Array<[number, 'slowTime' | 'ward']>;
+    dashAt?: Array<[number, DashDir]>;
   } = {},
 ): DuelEvent[] {
   const dt = 1000 / hz;
@@ -96,6 +101,7 @@ export function drive(
   let prevHead = { ...headAt(t) };
   const strikes = [...(extra.strikeAt ?? [])];
   const abilities = [...(extra.abilityAt ?? [])];
+  const dashes = [...(extra.dashAt ?? [])];
   while (t < tEnd - 1e-9) {
     const t1 = t + dt;
     const cur = clone(poseAt(t1));
@@ -107,6 +113,8 @@ export function drive(
     }
     let ability: 'slowTime' | 'ward' | null = null;
     if (abilities.length && abilities[0][0] <= t1) ability = abilities.shift()![1];
+    let dash: DashDir | null = null;
+    if (dashes.length && dashes[0][0] <= t1) dash = dashes.shift()![1];
     duel.step({
       t0: t,
       t1,
@@ -119,6 +127,7 @@ export function drive(
       strikePoke: extra.poke,
       twoHanded: extra.twoHanded,
       ability,
+      dash,
     });
     for (const e of duel.events) events.push({ ...e });
     prev = cur;

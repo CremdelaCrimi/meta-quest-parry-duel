@@ -8,6 +8,7 @@ import type {
   AbilityId,
   AttackDef,
   Combo,
+  DashDir,
   DodgeKind,
   DuelEvent,
   EnemyDef,
@@ -42,6 +43,10 @@ export interface DuelOptions {
   ai?: boolean;
   /** Carry HP between fights in a run. */
   playerHp?: number;
+  /** Training dummy: false = he never guards, so every strike lands (default true). */
+  guards?: boolean;
+  /** Training: nobody dies; HP refills when it runs out (a practiceReset event). */
+  practice?: boolean;
 }
 
 /**
@@ -112,6 +117,9 @@ export class Duel {
   /** Grip this frame. Guards are judged with the grip held at that instant. */
   twoHanded = false;
   private readonly ai: boolean;
+  /** Does he hold a guard while idle (deflecting strikes on that side)? */
+  readonly guards: boolean;
+  readonly practice: boolean;
   private readonly dodge = new DodgeDetector();
 
   // Scratch objects so step() doesn't allocate.
@@ -132,6 +140,8 @@ export class Duel {
     this.rng = new Rng(o.seed);
     this.guardRng = new Rng(o.seed ^ 0x5bd1e995);
     this.ai = o.ai ?? true;
+    this.guards = o.guards ?? true;
+    this.practice = o.practice ?? false;
     this.time = o.startT ?? 0;
 
     const p = this.player;
@@ -151,7 +161,7 @@ export class Duel {
   get opening(): GuardSide | 'all' | null {
     const e = this.enemy;
     if (e.state === 'dead') return null;
-    if (e.state !== 'idle' || this.time <= this.player.counterUntil) return 'all';
+    if (e.state !== 'idle' || this.time <= this.player.counterUntil || !this.guards) return 'all';
     return e.guardSide === 'left' ? 'right' : 'left';
   }
 
@@ -225,6 +235,7 @@ export class Duel {
     }
 
     if (inp.ability) this.useAbility(inp.ability, inp.t0);
+    if (inp.dash) this.onDodge({ kind: DASH_KIND[inp.dash], t: inp.t0 });
 
     const span = inp.t1 - inp.t0;
     for (let k = 1; k <= SUBSTEPS; k++) {
@@ -436,6 +447,12 @@ export class Duel {
   }
 
   private checkPlayerDead(t: number): void {
+    if (this.player.hp <= 0 && this.practice) {
+      this.player.hp = this.player.hpMax;
+      this.player.posture = 0;
+      this.emit({ type: 'practiceReset', t, who: 'player' });
+      return;
+    }
     if (this.player.hp <= 0 && !this.player.dead) {
       this.player.hp = 0;
       this.player.dead = true;
@@ -519,6 +536,9 @@ export class Duel {
     } else if (e.state === 'attack') {
       e.hp -= dmg;
       this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke });
+    } else if (!this.guards) {
+      e.hp -= dmg; // training dummy with no guard: everything lands
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
     } else if (zone !== 'center' && zone !== e.guardSide) {
       // Through his opening. He covers that side at once, so the next one has to go elsewhere.
       e.hp -= dmg;
@@ -535,6 +555,11 @@ export class Duel {
 
   private checkEnemyDead(t: number): boolean {
     const e = this.enemy;
+    if (e.hp <= 0 && this.practice) {
+      e.hp = e.def.hp;
+      this.emit({ type: 'practiceReset', t, who: 'enemy' });
+      return false;
+    }
     if (e.hp <= 0) {
       e.hp = 0;
       e.state = 'dead';
@@ -585,7 +610,7 @@ export class Duel {
     const spd = e.def.speed;
     switch (e.state) {
       case 'idle':
-        if (e.clock >= e.guardShiftAt) this.shiftGuard(e.guardSide === 'left' ? 'right' : 'left');
+        if (this.guards && e.clock >= e.guardShiftAt) this.shiftGuard(e.guardSide === 'left' ? 'right' : 'left');
         if (this.ai && e.clock >= e.nextActionAt) {
           const tw = this.frenzy()?.tripleWeight ?? 1;
           const pool = tw === 1 ? e.def.combos : e.def.combos.map((c) => ({ ...c, weight: c.steps.length === 3 ? c.weight * tw : c.weight }));
@@ -645,9 +670,16 @@ function dist(a: { x: number; y: number; z: number }, b: { x: number; y: number;
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
-function dodgeBeats(kind: DodgeKind | null, att: AttackDef): boolean {
+const DASH_KIND: Record<DashDir, DodgeKind> = { left: 'dashLeft', right: 'dashRight', forward: 'dashForward', back: 'dashBack' };
+
+/**
+ * Which dodges beat which attacks. Any dodge's i-frames beat a normal swing (safe, but no counter:
+ * parrying is the rewarded answer). A thrust needs a sidestep (lean or side dash); a sweep needs a
+ * duck or a back dash out of its reach. A forward dash only closes the distance.
+ */
+export function dodgeBeats(kind: DodgeKind | null, att: AttackDef): boolean {
   if (!kind) return false;
-  if (att.perilous === 'thrust') return kind === 'leanLeft' || kind === 'leanRight';
-  if (att.perilous === 'sweep') return kind === 'duck';
+  if (att.perilous === 'thrust') return kind === 'leanLeft' || kind === 'leanRight' || kind === 'dashLeft' || kind === 'dashRight';
+  if (att.perilous === 'sweep') return kind === 'duck' || kind === 'dashBack';
   return true;
 }

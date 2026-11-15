@@ -591,9 +591,10 @@ export class EnemyView {
     if (!this.openMark.parent) this.root.add(this.openMark);
     const o = duel.opening;
     const counter = duel.time <= duel.player.counterUntil && duel.enemy.state !== 'stagger';
-    const show = o === 'left' || o === 'right' || counter;
+    const unguarded = o === 'all' && !duel.guards && duel.enemy.state === 'idle'; // training dummy
+    const show = o === 'left' || o === 'right' || counter || unguarded;
     this.openPulse += dtMs / 1000;
-    const x = counter ? 0 : o === 'left' ? -0.17 : 0.17;
+    const x = counter || unguarded ? 0 : o === 'left' ? -0.17 : 0.17;
     this.openX += (x - this.openX) * (1 - Math.exp(-dtMs / 90)); // glide across when he shifts guard
     const target = show ? 0.55 + 0.25 * Math.sin(this.openPulse * 6) : 0;
     this.openMat.opacity += (target - this.openMat.opacity) * (1 - Math.exp(-dtMs / 60));
@@ -674,7 +675,7 @@ export class EnemyView {
           lean = live ? (r === 'parried' ? -0.22 : r === 'blocked' ? 0.08 : 0.14) : 0;
         }
       } else {
-        copyPose(this.target, e.state === 'idle' ? IDLE_GUARD[e.guardSide] : REST);
+        copyPose(this.target, e.state === 'idle' && duel.guards ? IDLE_GUARD[e.guardSide] : REST);
       }
     }
     if (!swing) {

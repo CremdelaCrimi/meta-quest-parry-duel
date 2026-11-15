@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { DashDir, V3 } from '../core/types';
 import type { DuelSpace } from '../render/duelSpace';
 import { LEFT_GRIP_SPOT_M } from '../render/views';
 import type { SwordView } from '../render/views';
@@ -40,6 +41,10 @@ export interface InputFrame {
   navY: number;
   /** Menu confirm: right trigger or A (desktop: click, Enter or Space). */
   select: boolean;
+  /** Dash: flick the left stick (desktop: arrow keys). Up = toward the enemy. */
+  dash: DashDir | null;
+  /** Right stick flick left/right (desktop: T): switch training dummy. */
+  cycle: number;
   /** Desktop: a pickup card chosen by number key / click (0-2), else -1. */
   choose: number;
 }
@@ -50,7 +55,17 @@ export interface InputDevice {
   pulse(hand: 'left' | 'right', intensity: number, ms: number): void;
   /** Rumble strength multiplier from the menu (0 = off). */
   hapticScale: number;
+  /** Move the player: `world` is the step in world space, `duel` the same step in duel coordinates. */
+  move(world: THREE.Vector3, duel: V3): void;
 }
+
+/** How long a dash takes (ms). Short enough to read as a step, long enough not to feel like a teleport. */
+const DASH_MS = 140;
+/** A dash never takes you further than this from where you started (m), so you stay in the arena. */
+const MAX_TRAVEL_M = 2.5;
+
+/** Stick position -> -1 / 0 / +1 with hysteresis, so holding a stick is one step, not many. */
+const stepOf = (v: number, last: number) => (Math.abs(v) > 0.6 ? Math.sign(v) : Math.abs(v) < 0.3 ? 0 : last);
 
 function emptyFrame(): InputFrame {
   return {
@@ -71,6 +86,8 @@ function emptyFrame(): InputFrame {
     navX: 0,
     navY: 0,
     select: false,
+    dash: null,
+    cycle: 0,
     choose: -1,
   };
 }
@@ -81,10 +98,17 @@ function emptyFrame(): InputFrame {
 export class XRInput implements InputDevice {
   readonly frame = emptyFrame();
   private readonly prev = { rt: false, lt: false, lg: false, x: false, a: false, b: false, y: false, ls: false };
-  /** Stick direction last frame, so one flick = one menu step (with hysteresis). */
-  private stickX = 0;
-  private stickY = 0;
+  /** Stick directions last frame (left x/y, right x/y), so one flick = one step. */
+  private readonly sticks = [0, 0, 0, 0];
   hapticScale = 1;
+
+  // Dash locomotion: an offset reference space slides the player through the world.
+  private xrSession: XRSession | null = null;
+  private baseRef: XRReferenceSpace | null = null;
+  private readonly offset = new THREE.Vector3();
+  private readonly moveFrom = new THREE.Vector3();
+  private readonly moveTo = new THREE.Vector3();
+  private moveT0 = -1;
   private readonly grips: THREE.Group[] = [];
   private rightGrip: THREE.Group | null = null;
   private leftGripObj: THREE.Group | null = null;
@@ -148,16 +172,25 @@ export class XRInput implements InputDevice {
       f.headQuat.set(o.x, o.y, o.z, o.w);
     }
 
+    if (session !== this.xrSession) {
+      // New session: three.js made a fresh reference space; dashes offset from that.
+      this.xrSession = session;
+      this.baseRef = ref;
+      this.offset.set(0, 0, 0);
+      this.moveT0 = -1;
+    }
     let rt = false, lt = false, lg = false, x = false, a = false, b = false, y = false, ls = false;
-    let sx = 0, sy = 0;
+    const axes = [0, 0, 0, 0];
     for (const src of session.inputSources) {
       const gp = src.gamepad;
       if (!gp) continue;
       const pressed = (i: number) => !!gp.buttons[i]?.pressed;
       // xr-standard: axes[2], axes[3] are the thumbstick (Quest 1/2/3 Touch controllers all match).
-      const ax = gp.axes[2] ?? 0, ay = gp.axes[3] ?? 0;
-      if (Math.abs(ax) > Math.abs(sx)) sx = ax;
-      if (Math.abs(ay) > Math.abs(sy)) sy = ay;
+      const o = src.handedness === 'left' ? 0 : src.handedness === 'right' ? 2 : -1;
+      if (o >= 0) {
+        axes[o] = gp.axes[2] ?? 0;
+        axes[o + 1] = gp.axes[3] ?? 0;
+      }
       if (src.handedness === 'right') {
         rt = pressed(0);
         a = pressed(4);
@@ -191,12 +224,23 @@ export class XRInput implements InputDevice {
     f.menu = (y && !pv.y) || (ls && !pv.ls);
     f.select = (rt && !pv.rt) || (a && !pv.a);
     Object.assign(pv, { rt, lt, lg, x, a, b, y, ls });
-    const step = (v: number, last: number) => (Math.abs(v) > 0.6 ? Math.sign(v) : Math.abs(v) < 0.3 ? 0 : last);
-    const nx = step(sx, this.stickX), ny = step(sy, this.stickY);
-    f.navX = nx !== this.stickX ? nx : 0;
-    f.navY = ny !== this.stickY ? ny : 0;
-    this.stickX = nx;
-    this.stickY = ny;
+    // Flicks: a stick leaving the centre. Either stick moves through menus; in a fight the left
+    // stick dashes and the right stick switches the training dummy.
+    const flick = axes.map((v, i) => {
+      const s = stepOf(v, this.sticks[i]);
+      const edge = s !== this.sticks[i] ? s : 0;
+      this.sticks[i] = s;
+      return edge;
+    });
+    f.navX = flick[0] || flick[2];
+    f.navY = flick[1] || flick[3];
+    f.cycle = flick[2];
+    f.dash = null;
+    if (flick[0] || flick[1]) {
+      const ax = axes[0], ay = axes[1];
+      f.dash = Math.abs(ax) > Math.abs(ay) ? (ax < 0 ? 'left' : 'right') : ay < 0 ? 'forward' : 'back';
+    }
+    this.applyMove(now);
     f.choose = -1;
   }
 
@@ -265,6 +309,30 @@ export class XRInput implements InputDevice {
     }
   }
 
+  /** Dash: slide the player by `world` over DASH_MS (the duel space then re-centres the enemy on you). */
+  move(world: THREE.Vector3): void {
+    if (!this.baseRef) return;
+    this.moveFrom.copy(this.offset);
+    this.moveTo.copy(this.offset).add(world);
+    this.moveTo.y = 0;
+    if (this.moveTo.length() > MAX_TRAVEL_M) this.moveTo.setLength(MAX_TRAVEL_M);
+    this.moveT0 = performance.now();
+  }
+
+  /**
+   * Applied at the end of poll, so this whole frame used one reference space and next frame's
+   * head, controllers and camera all see the new position together.
+   */
+  private applyMove(now: number): void {
+    if (this.moveT0 < 0 || !this.baseRef) return;
+    const k = Math.min(1, (now - this.moveT0) / DASH_MS);
+    this.offset.lerpVectors(this.moveFrom, this.moveTo, 1 - (1 - k) ** 3); // ease out: fast start
+    // Poses in the new space = poses in the base space minus the origin, so moving +d means origin -d.
+    const o = this.offset;
+    this.renderer.xr.setReferenceSpace(this.baseRef.getOffsetReferenceSpace(new XRRigidTransform({ x: -o.x, y: 0, z: -o.z })));
+    if (k >= 1) this.moveT0 = -1;
+  }
+
   pulse(hand: 'left' | 'right', intensity: number, ms: number): void {
     const session = this.renderer.xr.getSession();
     if (!session || this.hapticScale <= 0) return;
@@ -280,7 +348,7 @@ export class XRInput implements InputDevice {
 // Desktop fallback: mouse = sword, keys = dodge/abilities. For quick checks without a headset.
 //   Mouse left/right/up/down of centre -> left/right/high/low guard. Click = strike.
 //   A / D = lean, S = duck, Q = slow time, E = ward, G = two-handed grip, 1-6 = pick a card,
-//   R = recalibrate, M / Esc = menu (arrows + Enter inside it).
+//   R = recalibrate, M / Esc = menu (arrows + Enter inside it), arrows = dash, T = next dummy.
 
 export class DesktopInput implements InputDevice {
   readonly frame = emptyFrame();
@@ -290,6 +358,9 @@ export class DesktopInput implements InputDevice {
   private keys = new Set<string>();
   private pressedKeys = new Set<string>();
   private lean = new THREE.Vector3();
+  /** Dash offset in duel coordinates: jumps out, then drifts back as the enemy re-centres on you. */
+  private readonly dashTarget = { x: 0, z: 0 };
+  private readonly dashCur = { x: 0, z: 0 };
   private readonly base = new THREE.Vector3(0, 1.6, 0);
   private readonly v = { x: 0, y: 0, z: 0 };
 
@@ -326,9 +397,14 @@ export class DesktopInput implements InputDevice {
     const ty = this.keys.has('s') ? -0.35 : 0;
     this.lean.x += (tx - this.lean.x) * 0.35;
     this.lean.y += (ty - this.lean.y) * 0.35;
-    this.v.x = this.lean.x;
+    const dc = this.dashCur, dtg = this.dashTarget;
+    dtg.x *= 0.975; // ~0.7 s back to centre at 60 fps, like DuelSpace.follow in VR
+    dtg.z *= 0.975;
+    dc.x += (dtg.x - dc.x) * 0.45;
+    dc.z += (dtg.z - dc.z) * 0.45;
+    this.v.x = this.lean.x + dc.x;
     this.v.y = this.lean.y;
-    this.v.z = 0;
+    this.v.z = dc.z;
     if (this.space.calibrated) this.space.toWorld(this.v, f.headPos);
     else f.headPos.copy(this.base);
     this.camera.position.copy(f.headPos);
@@ -336,7 +412,7 @@ export class DesktopInput implements InputDevice {
 
     // Sword from mouse, in duel coordinates, oriented per region so all four guards are reachable.
     // Guards are measured from the current head, so the sword moves with a lean.
-    const x = this.mx * 0.55 + this.lean.x;
+    const x = this.mx * 0.55 + this.lean.x + dc.x;
     const y = -0.55 + this.my * 0.55;
     let h: { x: number; y: number; z: number };
     let t: { x: number; y: number; z: number };
@@ -350,6 +426,8 @@ export class DesktopInput implements InputDevice {
       h = { x, y: y - 0.4, z: 0.35 }; // side: vertical blade
       t = { x, y: y + 0.4, z: 0.35 };
     }
+    h.z += dc.z;
+    t.z += dc.z;
     if (this.space.calibrated) {
       this.space.toWorld(h, f.hilt);
       this.space.toWorld(t, f.tip);
@@ -371,6 +449,8 @@ export class DesktopInput implements InputDevice {
     f.menu = pk.has('m') || pk.has('escape');
     f.navX = pk.has('arrowleft') ? -1 : pk.has('arrowright') ? 1 : 0;
     f.navY = pk.has('arrowup') ? -1 : pk.has('arrowdown') ? 1 : 0;
+    f.dash = f.navX < 0 ? 'left' : f.navX > 0 ? 'right' : f.navY < 0 ? 'forward' : f.navY > 0 ? 'back' : null;
+    f.cycle = pk.has('t') ? 1 : 0;
     f.select = this.click || pk.has('enter') || pk.has(' ');
     pk.clear();
     this.click = false;
@@ -378,4 +458,9 @@ export class DesktopInput implements InputDevice {
 
   pulse(): void {}
   hapticScale = 1;
+
+  move(_world: THREE.Vector3, duel: V3): void {
+    this.dashTarget.x += duel.x;
+    this.dashTarget.z += duel.z;
+  }
 }

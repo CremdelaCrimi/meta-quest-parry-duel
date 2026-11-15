@@ -6,9 +6,50 @@ directional blocking, lean/duck dodges, and roguelite boons between fights.
 ## Play
 - **Quest:** open the GitHub Pages URL in Quest Browser → *Enter VR*. Stand in your spot, face forward, pull the right trigger.
 - **Desktop test mode:** `npm install && npm run dev`, open the URL. Mouse = guard side, click = start/strike,
-  A/D lean, S duck, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, M / Esc menu, R recalibrate.
+  A/D lean, S duck, arrows dash, Q time sigil, E ward, G two-handed grip, 1–6 pick a card, T next dummy,
+  M / Esc menu, R recalibrate.
 - **Older headsets (Quest 1 / Quest 2):** same link, same controls. The game spots the headset and
   switches to a lighter graphics mode by itself (see *Menu and settings*).
+
+## Training
+After the start screen, pick **Training** (or **Run** for the real thing). Training gives you a dummy
+that never dies (HP refills), your current weapon, and two extra panels:
+
+- **Swing timeline** (left): every swing laid out on a time axis around the strike instant. The
+  GUARD lane shows when a guard counts as *held early = block*, *perfect* (gold), *late block* and
+  *too late = hit*; for red attacks it becomes a DODGE lane with the i-frame window. The STRIKE lane
+  shows when your strikes land: during his windup (you trade hits), during his recovery (safe punish),
+  and the gold COUNTER ×1.5 window after a perfect or a dodge. Ticks mark what you actually did; a
+  cursor runs along it during the swing, and the last swing stays up for review.
+- **Coach** (right): what he's doing right now and what to do about it, in words ("HE GUARDS HIS
+  LEFT · hit his right side · moves his guard in 1.4 s"), your grip, and a running tally.
+
+Flick the **right stick** left/right (desktop: T) to switch the dummy:
+
+| Dummy | Attacks | Guards | Use it to |
+|---|---|---|---|
+| Idle | no | no | feel your swings: every strike lands |
+| Attacking | yes | no | practise blocks and dodges; punish anywhere |
+| Deflecting | no | yes | learn openings: strikes on his sword side are deflected |
+| Attack + deflect | yes | yes | the real fight |
+
+The menu (Y) also picks **Swings** (mixed, vertical only, horizontal only, diagonal only, thrusts,
+sweeps, 2–3 hit strings), **Enemy speed** (slow = the Trainer, normal, fast = the last enemy) and
+**Weapon**. Dummy data lives in `src/core/training.ts`.
+
+## Dash
+Flick the **left stick** (desktop: arrow keys) to dash: left/right 0.55 m, toward him 0.5 m, away
+0.6 m, at most one every 400 ms. In VR you really move (an offset reference space slides you over
+140 ms) and the enemy re-centres on you over about a second, so a forward dash buys a moment in
+striking range. Every dash has the dodge's 320 ms of i-frames:
+
+| | Normal swing | Red thrust | Red sweep |
+|---|---|---|---|
+| Side dash / lean | dodged | dodged + counter | hit |
+| Back dash / duck | dodged | hit | dodged + counter |
+| Forward dash | dodged | hit | hit |
+
+Dodging a normal swing is safe but gives no counter: the perfect parry is still the rewarded answer.
 
 ## Menu and settings
 Press **Y** (or click the left thumbstick) at any time to pause. The fight freezes until you close it.
@@ -42,6 +83,8 @@ before the run and through the first fight (the Trainer: slow, one swing at a ti
 | Right hand | Sword. **Block** by holding it in the glowing box (ghost sword shows how) before the swing lands |
 | Swing into enemy | **Strike**. While he waits he guards one side: hit the side his sword isn't on (green ring). Lands anywhere while he swings; counter after a perfect parry; finisher when posture breaks |
 | Lean / duck | **Dodge** the red must-dodge attacks: lean out of a thrust, duck under a sweep (Duelist and Sentinel) |
+| Left stick flick | **Dash** left / right / toward / away (see *Dash*) |
+| Right stick flick ←→ | Switch the training dummy |
 | Left grip, hand on the handle | **Two-handed grip** (see below) |
 | X | Ward: absorb the next hit (every run starts with it) |
 | Left trigger | Time Sigil (once picked up) |
@@ -118,7 +161,7 @@ and pull the trigger, or 1–6 on desktop). Your last picks are remembered and t
 Relics are the boons Time Sigil, Keen Eye, Fleet Step, Vigor, Blood Deflect and Iron Wrist (`RELIC_IDS`).
 
 **Dodges:** the Duelist adds a thrust and the Sentinel a sweep, both glowing red, always named above
-him, and unblockable. Lean (thrust) or duck (sweep) just before it lands; a clean dodge opens the same
+him, and unblockable. Lean or side-dash (thrust), duck or back-dash (sweep) just before it lands; a clean dodge opens the same
 counter window as a perfect parry (gold ring, "DODGED · COUNTER NOW!") and flashes the edge of view blue.
 
 **Enemy body language:** he coils a little further back just before a swing commits, his torso

@@ -22,7 +22,10 @@ export type Dir = 'high' | 'left' | 'right' | 'low';
 /** Perilous attacks cannot be blocked: thrusts need a lean-dodge, sweeps need a duck. */
 export type Perilous = 'none' | 'thrust' | 'sweep';
 
-export type DodgeKind = 'leanLeft' | 'leanRight' | 'duck';
+export type DodgeKind = 'leanLeft' | 'leanRight' | 'duck' | 'dashLeft' | 'dashRight' | 'dashForward' | 'dashBack';
+
+/** Dash button (left stick flick): a quick step in that direction, relative to the enemy. */
+export type DashDir = 'left' | 'right' | 'forward' | 'back';
 
 /** Where the player's strike met the enemy's body, from the player's view. */
 export type StrikeZone = 'left' | 'right' | 'center';
@@ -184,6 +187,8 @@ export interface FrameInput {
   twoHanded?: boolean;
   /** Ability activated this frame (edge-triggered), or null. */
   ability: AbilityId | null;
+  /** Dash started this frame (edge-triggered), or null. */
+  dash?: DashDir | null;
 }
 
 export type DuelEventType =
@@ -202,7 +207,9 @@ export type DuelEventType =
   | 'enemyDead'
   | 'playerDead'
   | 'abilityUsed'
-  | 'wardAbsorb';
+  | 'wardAbsorb'
+  /** Practice: HP ran out and was refilled instead of ending the fight. */
+  | 'practiceReset';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
@@ -232,4 +239,6 @@ export interface DuelEvent {
   poke?: boolean;
   /** On enemyHit: it went through his opening while he was idle. */
   opening?: boolean;
+  /** On practiceReset: whose HP was refilled. */
+  who?: 'player' | 'enemy';
 }

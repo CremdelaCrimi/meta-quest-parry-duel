@@ -10,6 +10,8 @@ export interface MenuItem {
   hint?: () => string;
   change?: (dir: number) => void;
   act?: () => void;
+  /** Left out of the list (e.g. a row that doesn't apply in training). */
+  hidden?: boolean;
 }
 
 const BG = 'rgba(10,12,18,0.92)';
@@ -24,7 +26,7 @@ const FONT = 'system-ui, sans-serif';
  * Navigate with either thumbstick (or arrow keys); trigger / A selects; Y / B closes.
  */
 export class PauseMenu {
-  readonly panel = new CanvasPanel(1024, 1100, 0.7);
+  readonly panel = new CanvasPanel(1024, 1200, 0.7);
   isOpen = false;
   private page: 'main' | 'controls' = 'main';
   private cursor = 0;
@@ -122,7 +124,7 @@ export class PauseMenu {
       ctx.font = `500 28px ${FONT}`;
       ctx.fillText(this.status(), 48, 132);
 
-      const rowH = 78;
+      const rowH = Math.min(78, Math.floor((h - 250) / this.items.length));
       let y = 170;
       this.items.forEach((it, i) => {
         const sel = i === this.cursor;
@@ -190,14 +192,14 @@ export class PauseMenu {
         controller(ctx, 260, 330, 'L', [
           ['Y', 'MENU (this screen)', GOLD],
           ['X', 'Ward: absorb next hit', '#6fb6ff'],
-          ['Stick', 'Press: menu · Flick: move in menus', TEXT],
+          ['Stick', 'Flick: DASH that way · press: menu', '#60c0ff'],
           ['Trigger', 'Time Sigil (once picked up)', '#b48cff'],
           ['Grip', 'Two hands: hand on the handle', '#ffd060'],
         ]);
         controller(ctx, 260, 700, 'R', [
           ['B', 'Re-center the arena on you', TEXT],
           ['A', 'Stats panel · select in menus', TEXT],
-          ['Stick', 'Flick: move in menus', TEXT],
+          ['Stick', 'Flick ←→: switch training dummy', TEXT],
           ['Trigger', 'Start · confirm · pick a card', GOLD],
           ['Grip', 'Not used: you hold the sword', DIM],
         ]);
@@ -206,6 +208,8 @@ export class PauseMenu {
           ['Mouse', 'Sword: left / right / high / low guard'],
           ['Click', 'Start · strike · pick'],
           ['A / D · S', 'Lean (dodge thrust) · duck (dodge sweep)'],
+          ['Arrows', 'Dash left / right / toward / away'],
+          ['T', 'Switch training dummy'],
           ['E', 'Ward: absorb next hit'],
           ['Q', 'Time Sigil (once picked up)'],
           ['G', 'Two-handed grip'],
@@ -228,7 +232,7 @@ export class PauseMenu {
 
       ctx.fillStyle = '#ff8a5a';
       ctx.font = `700 30px ${FONT}`;
-      ctx.fillText('Body: lean out of red thrusts, duck under red sweeps.', 48, h - 110);
+      ctx.fillText('Red thrust: lean or dash sideways. Red sweep: duck or dash back.', 48, h - 110);
       ctx.fillStyle = DIM;
       ctx.font = `500 26px ${FONT}`;
       ctx.textAlign = 'center';

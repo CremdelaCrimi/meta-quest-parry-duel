@@ -7,26 +7,46 @@ import type { Loadout, Weapon } from './core/loadout';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel } from './core/sim';
-import type { AbilityId, AttackDef, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
+import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
 import { ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
 import { PauseMenu } from './render/pauseMenu';
+import { DRILLS, DUMMY_MODES, DUMMY_SPEEDS, dummyDef } from './core/training';
+import type { DummyMode } from './core/training';
+import { TRAIN_COLORS, drawCoach, drawTimeline } from './render/trainingPanels';
+import type { TimelineData } from './render/trainingPanels';
 import type { MenuItem } from './render/pauseMenu';
 import { headsetName, loadSettings, resolveQuality, saveSettings } from './settings';
 import type { Quality } from './settings';
 
 type Phase = 'calibrate' | 'loadout' | 'fight' | 'won' | 'reward' | 'dead';
 /** What the cards are offering: a boon after a win, or the weapon / relic before a run. */
-type Menu = 'boon' | 'weapon' | 'relic';
+type Menu = 'boon' | 'weapon' | 'relic' | 'mode';
 interface Offer {
   id: string;
   name: string;
   desc: string;
 }
 const LOADOUT_KEY = 'parryDuel.loadout';
+
+/** First choice after the start screen. */
+const MODE_OFFERS: Offer[] = [
+  { id: 'training', name: 'Training', desc: 'A dummy that never dies. Switch what it does: idle, attacking, deflecting, both.' },
+  { id: 'run', name: 'Run', desc: 'Four duels in a row, a boon after each win. Death ends the run.' },
+];
+
+/** Dash distances (m) in duel coordinates: sideways, toward him, away from him. */
+const DASH_STEP: Record<DashDir, V3> = {
+  left: { x: -0.55, y: 0, z: 0 },
+  right: { x: 0.55, y: 0, z: 0 },
+  forward: { x: 0, y: 0, z: 0.5 },
+  back: { x: 0, y: 0, z: -0.6 },
+};
+/** Minimum time between dashes (ms). The sim's dodge cooldown is shorter; this keeps dashes from chaining into a glide. */
+const DASH_COOLDOWN_MS = 400;
 
 function loadLoadout(): Loadout {
   try {
@@ -119,6 +139,17 @@ export class Game {
   private readonly pause: PauseMenu;
   private pauseOffset = 0;
   private lastRaw = NaN;
+  // Training mode: a dummy that never dies, with a swing timeline and a coach panel.
+  training = false;
+  dummyMode: DummyMode = 'full';
+  drillIdx = 0;
+  speedIdx = 0;
+  private readonly timeline = new CanvasPanel(1024, 470, 0.8);
+  private readonly coach = new CanvasPanel(1024, 540, 0.7);
+  private trainAt = 0;
+  private tl: (TimelineData & { realStart: number }) | null = null;
+  private readonly trainStats = { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 };
+  private dashReadyAt = 0;
   /** main.ts applies a graphics level (foveation, refresh rate, render scale). */
   onGraphics: (level: 'high' | 'low') => void = () => {};
   private calloutKey = '';
@@ -180,6 +211,11 @@ export class Game {
     const q = new URLSearchParams(location.search);
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
+    this.space.group.add(this.timeline.mesh, this.coach.mesh);
+    place(this.timeline.mesh, { x: -0.95, y: 0.05, z: ENEMY_DIST - 0.45 });
+    place(this.coach.mesh, { x: 0.9, y: 0.05, z: ENEMY_DIST - 0.45 });
+    this.timeline.mesh.visible = false;
+    this.coach.mesh.visible = false;
 
     place(this.hud.mesh, { x: -1.0, y: -0.25, z: 1.25 });
     place(this.banner.mesh, { x: 0, y: 0.5, z: 1.4 });
@@ -222,6 +258,7 @@ export class Game {
       this.sfx.play('ui');
       if (this.pause.isOpen) this.closeMenu();
       else {
+        this.pause.setItems(this.menuItems());
         this.pause.open(f.headPos, f.headQuat);
         this.vignette.set(f.headPos, f.headQuat, 0, 0);
       }
@@ -262,7 +299,7 @@ export class Game {
         if (f.rightTrigger) {
           this.sfx.play('ui');
           this.space.calibrate(f.headPos, f.headQuat);
-          this.startRun(t);
+          this.openMenu('mode', t);
         }
         break;
       case 'fight':
@@ -294,6 +331,13 @@ export class Game {
       this.drawStatus();
       this.drawEnemyPanel(t);
       this.statusAt = t + 100;
+    }
+    const trainView = this.training && this.phase === 'fight';
+    this.timeline.mesh.visible = trainView;
+    this.coach.mesh.visible = trainView;
+    if (trainView && t >= this.trainAt) {
+      this.drawTraining();
+      this.trainAt = t + 66; // ~15 Hz: smooth enough for the cursor, cheap on texture uploads
     }
     if (this.hud.mesh.visible && t >= this.hudAt) {
       this.drawHud(t);
@@ -345,6 +389,21 @@ export class Game {
     }
     if (strikeSpeed > 0) this.strikeReadyAt = t + STRIKE_COOLDOWN_MS[f.twoHanded ? 'two' : 'one'] * this.weapon.strikeCooldownMult;
 
+    // Dash: step left/right/toward/away from him. The view slides you; the sim gets i-frames.
+    let dash: DashDir | null = null;
+    if (f.dash && this.phase === 'fight' && t >= this.dashReadyAt) {
+      dash = f.dash;
+      this.dashReadyAt = t + DASH_COOLDOWN_MS;
+      const step = DASH_STEP[dash];
+      DuelSpace.toLocal(step, this.tmp).applyQuaternion(this.space.group.quaternion);
+      this.input.move(this.tmp, step);
+      this.input.pulse('left', 0.3, 30);
+    }
+    if (this.training && f.cycle && this.phase === 'fight') {
+      const i = DUMMY_MODES.findIndex((m) => m.id === this.dummyMode);
+      this.setDummy(DUMMY_MODES[(i + f.cycle + DUMMY_MODES.length) % DUMMY_MODES.length].id, t);
+    }
+
     let ability: AbilityId | null = null;
     if (f.leftTrigger) ability = 'slowTime';
     else if (f.btnX) ability = 'ward'; // left grip is for holding the sword with both hands
@@ -361,8 +420,12 @@ export class Game {
       strikePoke,
       twoHanded: f.twoHanded,
       ability,
+      dash,
     });
-    for (const ev of this.duel.events) this.onEvent(ev, t);
+    for (const ev of this.duel.events) {
+      this.onEvent(ev, t);
+      if (this.training) this.trainEvent(ev);
+    }
 
     copyPose(this.swordPrev, this.swordCurr);
     Object.assign(this.headPrev, this.headCurr);
@@ -409,9 +472,9 @@ export class Game {
         this.record(ev.offsetMs ?? 0, 'hit', ev.faults ?? []);
         const why =
           ev.perilous === 'thrust'
-            ? ' (thrust: lean!)'
+            ? ' (thrust: lean or side-dash!)'
             : ev.perilous === 'sweep'
-              ? ' (sweep: duck!)'
+              ? ' (sweep: duck or back-dash!)'
               : ev.faults?.includes('side')
                 ? ` · block ${ev.dir === 'high' ? 'HIGH' : ev.dir?.toUpperCase()}`
                 : ` · ${faultText(ev.faults)}`;
@@ -476,6 +539,9 @@ export class Game {
         this.setPhase('dead', t);
         this.showBanner('DEATH', COLORS.hit, `Reached fight ${this.run.fight + 1}. Trigger for a new run`);
         break;
+      case 'practiceReset':
+        this.flashResult(ev.who === 'enemy' ? 'Dummy HP refilled' : 'Your HP refilled', COLORS.info, t);
+        break;
       case 'abilityUsed':
         this.sfx.play('ui');
         this.flashResult(ev.ability === 'slowTime' ? 'TIME SIGIL' : 'WARD UP', COLORS.block, t);
@@ -500,6 +566,7 @@ export class Game {
   }
 
   private beginRun(t: number): void {
+    this.training = false;
     this.weapon = weaponById(this.loadout.weapon);
     this.sword.setBladeLength(this.weapon.bladeM);
     this.run = new Run((Date.now() ^ Math.floor(t)) >>> 0);
@@ -511,7 +578,10 @@ export class Game {
   private openMenu(menu: Menu, t: number): void {
     this.menu = menu;
     const pick = this.isXR ? 'Touch a card with your blade, pull trigger' : `Press 1–${menu === 'boon' ? 3 : menu === 'weapon' ? WEAPONS.length : RELICS.length}`;
-    if (menu === 'weapon') {
+    if (menu === 'mode') {
+      this.offers = MODE_OFFERS;
+      this.showBanner('TRAINING OR RUN?', COLORS.info, this.isXR ? 'Touch a card with your blade, pull trigger' : 'Press 1 or 2');
+    } else if (menu === 'weapon') {
       this.offers = WEAPONS;
       this.showBanner('CHOOSE YOUR WEAPON', COLORS.info, pick);
     } else if (menu === 'relic') {
@@ -530,7 +600,10 @@ export class Game {
     this.duel = new Duel({
       timing: this.timing,
       guard: DEFAULT_GUARD,
-      enemy: this.run.enemyForFight(),
+      enemy: this.training ? dummyDef(this.dummyMode, this.drillIdx, this.speedIdx) : this.run.enemyForFight(),
+      ai: this.training ? DUMMY_MODES.find((m) => m.id === this.dummyMode)!.attacks : true,
+      guards: this.training ? DUMMY_MODES.find((m) => m.id === this.dummyMode)!.guards : true,
+      practice: this.training,
       mods: this.run.mods,
       seed: (this.run.seed + this.run.fight * 7919) >>> 0,
       startT: t,
@@ -538,6 +611,165 @@ export class Game {
     });
     this.enemyView.reset();
     this.resetPrev = true;
+    this.tl = null;
+  }
+
+  // ---------------------------------------------------------------- training
+
+  /** Training: your current weapon, a dummy that never dies, and no run to lose. */
+  private startTraining(t: number): void {
+    this.training = true;
+    this.weapon = weaponById(this.loadout.weapon);
+    this.sword.setBladeLength(this.weapon.bladeM);
+    this.run = new Run((Date.now() ^ Math.floor(t)) >>> 0);
+    this.run.equip(this.weapon, null);
+    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 });
+    this.newDuel(t);
+    this.setPhase('fight', t);
+    this.flashResult(`Training · ${this.dummyName()}`, COLORS.info, t);
+  }
+
+  private leaveTraining(t: number): void {
+    this.training = false;
+    this.run = new Run(1);
+    this.newDuel(t);
+    this.setPhase('calibrate', t);
+  }
+
+  private dummyName(): string {
+    return DUMMY_MODES.find((m) => m.id === this.dummyMode)!.name;
+  }
+
+  /** Swap what the dummy does. A fresh duel, so a swing in flight never carries over. */
+  private setDummy(mode: DummyMode, t: number): void {
+    this.dummyMode = mode;
+    Object.assign(this.trainStats, { perfect: 0, block: 0, hit: 0, dodged: 0, landed: 0, deflected: 0 });
+    this.newDuel(t);
+    this.flashResult(`Dummy: ${this.dummyName()}`, COLORS.info, t);
+    this.sfx.play('ui');
+  }
+
+  /** Swing timeline bookkeeping and the training tally. */
+  private trainEvent(ev: DuelEvent): void {
+    const d = this.duel;
+    const st = this.trainStats;
+    const rel = (t: number) => (this.tl ? t - (this.tl.realStart + this.tl.windup) : 0);
+    switch (ev.type) {
+      case 'attackStart': {
+        const att = d.currentAttack!;
+        const e = d.enemy;
+        const last = e.combo ? e.stepIndex === e.combo.steps.length - 1 : true;
+        const spd = e.def.speed;
+        const [title, how, color] = calloutFor(att);
+        this.tl = {
+          title,
+          how,
+          color,
+          realStart: ev.t,
+          windup: d.windup(att),
+          after: last ? att.recoverMs / spd : (e.combo!.steps[e.stepIndex].chainDelayMs / spd),
+          afterIsRecovery: last,
+          perilous: att.perilous,
+          perfectEarly: d.perfectEarlyMs(),
+          perfectLate: this.timing.perfectLateMs,
+          blockLate: this.timing.blockLateMs,
+          iframes: this.timing.iframesMs + d.mods.iframesBonusMs,
+          counter: null,
+          now: 0,
+          marks: [],
+        };
+        break;
+      }
+      case 'perfect':
+        st.perfect++;
+        this.tl?.marks.push({ ms: ev.offsetMs!, lane: 'guard', color: COLORS.perfect, label: 'PERFECT' });
+        if (this.tl) this.tl.counter = [rel(ev.t) + this.timing.hitStopMs, rel(d.player.counterUntil)];
+        break;
+      case 'block':
+        st.block++;
+        this.tl?.marks.push({ ms: ev.offsetMs!, lane: 'guard', color: COLORS[outcomeColor('block', ev.faults)], label: faultText(ev.faults) });
+        break;
+      case 'hit':
+        st.hit++;
+        this.tl?.marks.push({ ms: ev.offsetMs ?? 0, lane: 'guard', color: COLORS.hit, label: ev.faults?.includes('side') ? 'no guard' : 'HIT' });
+        break;
+      case 'dodge':
+        this.tl?.marks.push({ ms: rel(ev.t), lane: 'guard', color: '#60c0ff', label: ev.dodge?.startsWith('dash') ? 'dash' : 'dodge' });
+        break;
+      case 'dodged':
+        st.dodged++;
+        if (this.tl && ev.perilous !== 'none') this.tl.counter = [0, rel(d.player.counterUntil)];
+        break;
+      case 'enemyHit':
+        st.landed++;
+        this.tl?.marks.push({ ms: rel(ev.t), lane: 'strike', color: COLORS.open, label: 'hit' });
+        break;
+      case 'enemyBlock':
+        st.deflected++;
+        this.tl?.marks.push({ ms: rel(ev.t), lane: 'strike', color: '#ffffff', label: 'deflected' });
+        break;
+    }
+  }
+
+  /** Coach: what the dummy is doing right now and what to do about it, in words. */
+  private coachLines(): Array<[string, string, number]> {
+    const d = this.duel;
+    const e = d.enemy;
+    const att = d.currentAttack;
+    const C = TRAIN_COLORS;
+    const out: Array<[string, string, number]> = [];
+    const counterLeft = d.player.counterUntil - d.time;
+    if (e.state === 'stagger') {
+      out.push(['POSTURE BROKEN', C.GOLD, 44], ['Strike him now: a finisher.', C.TEXT, 30]);
+    } else if (counterLeft > 0) {
+      out.push(['COUNTER WINDOW', C.GOLD, 44], [`Hit him anywhere for 1.5× damage (${Math.ceil(counterLeft)} ms left).`, C.TEXT, 30]);
+    } else if (att && !e.struck) {
+      const left = Math.max(0, d.windup(att) - (e.clock - e.attackStart));
+      if (att.perilous === 'thrust') out.push(['RED THRUST: DODGE', C.RED, 44], ['Lean or flick the left stick sideways just before it lands. Can\'t be blocked.', C.TEXT, 30]);
+      else if (att.perilous === 'sweep') out.push(['RED SWEEP: DODGE', C.RED, 44], ['Duck or flick the left stick back just before it lands. Can\'t be blocked.', C.TEXT, 30]);
+      else {
+        const [title, how] = calloutFor(att);
+        out.push([`BLOCK: ${title.replace(/^\S+\s+/, '')}`, C.BLUE, 40], [`${how}. Get there early, then hold still: gold ring = perfect.`, C.TEXT, 30]);
+      }
+      out.push([`Lands in ${Math.round(left)} ms`, C.DIM, 28]);
+    } else if (att && e.struck) {
+      out.push(['HE IS RECOVERING', C.GREEN, 44], ['Strike now: anything lands while he recovers.', C.TEXT, 30]);
+    } else if (!d.guards) {
+      out.push(['NO GUARD', C.GREEN, 44], ['Every strike lands. Try fast swings, pokes, one hand vs two hands.', C.TEXT, 30]);
+    } else {
+      const open = e.guardSide === 'left' ? 'RIGHT' : 'LEFT';
+      const shiftIn = Math.max(0, e.guardShiftAt - e.clock);
+      out.push(
+        [`HE GUARDS HIS ${e.guardSide === 'left' ? 'LEFT' : 'RIGHT'}`, C.TEXT, 40],
+        [`Hit his ${open} side (green ring). Hitting his sword or the middle is deflected; a poke still wears his posture.`, C.TEXT, 30],
+        [`Moves his guard in ${(shiftIn / 1000).toFixed(1)} s, or right after you land a hit.`, C.DIM, 28],
+      );
+    }
+    const two = this.input.frame.twoHanded;
+    out.push([two ? 'TWO HANDS: steadier guard, ×1.25 damage, slower strikes' : 'ONE HAND: quick strikes, pokes ×2. Left grip on the handle = two hands', '#ffd060', 26]);
+    const s = this.trainStats;
+    out.push([`Perfect ${s.perfect} · Block ${s.block} · Hit ${s.hit} · Dodged ${s.dodged} · Landed ${s.landed} · Deflected ${s.deflected}`, C.DIM, 26]);
+    return out;
+  }
+
+  private drawTraining(): void {
+    const d = this.duel;
+    const tl = this.tl;
+    if (tl) {
+      const now = d.time - (tl.realStart + tl.windup);
+      tl.now = now > tl.after ? null : now;
+      if (tl.now === null && tl.counter === null && d.currentAttack === null) tl.now = null;
+    }
+    const idle = !DUMMY_MODES.find((m) => m.id === this.dummyMode)!.attacks
+      ? ['This dummy doesn\'t swing.', 'Flick the right stick to pick', 'Attacking or Attack + deflect', 'to see each swing\'s timing here.']
+      : ['Waiting for his first swing…'];
+    drawTimeline(this.timeline, tl, idle);
+    drawCoach(
+      this.coach,
+      `TRAINING · ${this.dummyName().toUpperCase()} · ${DUMMY_SPEEDS[this.speedIdx].name}`,
+      this.coachLines(),
+      this.isXR ? 'R-stick ←→ dummy · L-stick flick dash · Y menu' : 'T dummy · arrows dash · M menu',
+    );
   }
 
   private showReward(t: number): void {
@@ -568,7 +800,10 @@ export class Game {
     this.sfx.play('ui');
     const id = this.offers[pick].id;
     for (const c of this.cards) c.mesh.visible = false;
-    if (this.menu === 'weapon') {
+    if (this.menu === 'mode') {
+      if (id === 'training') this.startTraining(t);
+      else this.startRun(t);
+    } else if (this.menu === 'weapon') {
       this.loadout.weapon = id;
       this.openMenu('relic', t);
     } else if (this.menu === 'relic') {
@@ -615,7 +850,13 @@ export class Game {
   private menuStatus(): string {
     const lvl = resolveQuality(this.settings.quality);
     const where =
-      this.phase === 'calibrate' ? 'Start screen' : this.phase === 'loadout' ? 'Loadout' : `Fight ${this.run.fight + 1} · ${this.duel.enemy.def.name}`;
+      this.phase === 'calibrate'
+        ? 'Start screen'
+        : this.training
+          ? `Training · ${this.dummyName()}`
+          : this.phase === 'loadout'
+            ? 'Loadout'
+            : `Fight ${this.run.fight + 1} · ${this.duel.enemy.def.name}`;
     return `${where} · ${headsetName()} · graphics ${lvl}`;
   }
 
@@ -626,9 +867,10 @@ export class Game {
     const save = () => saveSettings(s);
     const qualities: Quality[] = ['auto', 'high', 'low'];
     const step = <T,>(list: readonly T[], cur: T, dir: number): T => list[(Math.max(0, list.indexOf(cur)) + dir + list.length) % list.length];
-    return [
+    const rows: MenuItem[] = [
       { label: 'Resume', act: () => this.closeMenu() },
       { label: 'Controller buttons', hint: () => 'What every button does', act: () => this.pause.showControls() },
+      ...this.trainingRows(),
       {
         label: 'Difficulty',
         value: () => this.timing.name,
@@ -649,6 +891,7 @@ export class Game {
         },
       },
       {
+        hidden: this.training,
         label: 'Swing names',
         value: () => (s.callouts ? 'Always' : 'Trainer only'),
         change: () => {
@@ -694,12 +937,63 @@ export class Game {
           this.closeMenu();
         },
       },
+      this.training
+        ? { label: 'Leave training', hint: () => 'Back to the start screen', act: () => (this.closeMenu(), this.leaveTraining(this.lastT)) }
+        : {
+            label: 'New run',
+            hint: () => 'Back to weapon and relic choice',
+            act: () => {
+              this.closeMenu();
+              if (this.phase !== 'calibrate') this.startRun(this.lastT);
+            },
+          },
+    ];
+    return rows.filter((r) => !r.hidden);
+  }
+
+  /** Training rows: what the dummy does, which swings, how fast, and your weapon. */
+  private trainingRows(): MenuItem[] {
+    const t = () => this.lastT;
+    const cyc = (i: number, d: number, n: number) => (i + d + n) % n;
+    if (!this.training) {
+      return [{ label: 'Training mode', hint: () => 'Practise on a dummy that never dies', act: () => (this.closeMenu(), this.startTraining(t())) }];
+    }
+    return [
       {
-        label: 'New run',
-        hint: () => 'Back to weapon and relic choice',
-        act: () => {
-          this.closeMenu();
-          if (this.phase !== 'calibrate') this.startRun(this.lastT);
+        label: 'Dummy',
+        value: () => this.dummyName(),
+        hint: () => DUMMY_MODES.find((m) => m.id === this.dummyMode)!.desc,
+        change: (d) => this.setDummy(DUMMY_MODES[cyc(DUMMY_MODES.findIndex((m) => m.id === this.dummyMode), d, DUMMY_MODES.length)].id, t()),
+      },
+      {
+        label: 'Swings',
+        value: () => DRILLS[this.drillIdx].name,
+        hint: () => 'Which attacks he throws (when attacking)',
+        change: (d) => {
+          this.drillIdx = cyc(this.drillIdx, d, DRILLS.length);
+          this.newDuel(t());
+        },
+      },
+      {
+        label: 'Enemy speed',
+        value: () => DUMMY_SPEEDS[this.speedIdx].name,
+        hint: () => 'Slow = the Trainer, Fast = the last enemy',
+        change: (d) => {
+          this.speedIdx = cyc(this.speedIdx, d, DUMMY_SPEEDS.length);
+          this.newDuel(t());
+        },
+      },
+      {
+        label: 'Weapon',
+        value: () => this.weapon.name,
+        hint: () => 'Blade length, damage and strike speed',
+        change: (d) => {
+          const i = WEAPONS.findIndex((w) => w.id === this.weapon.id);
+          this.loadout.weapon = WEAPONS[cyc(i, d, WEAPONS.length)].id;
+          saveLoadout(this.loadout);
+          const mode = this.dummyMode;
+          this.startTraining(t());
+          this.dummyMode = mode;
         },
       },
     ];
@@ -883,7 +1177,7 @@ export class Game {
       line(xr ? 'LEFT HAND: squeeze grip on the handle = two hands' : 'G: two-handed grip', '700 32px system-ui, sans-serif', '#ffd060', 38);
       line('Steadier blocks, harder hits, slower. One hand: quick + pokes.', '500 27px system-ui, sans-serif', '#d8dce4', 50);
       line(
-        xr ? 'Y = MENU: settings + every button · X ward · B re-center' : 'M = MENU: settings + every key · E ward · R re-center',
+        xr ? 'Y = MENU (every button) · left stick flick = DASH · X ward' : 'M = MENU (every key) · arrows = DASH · E ward',
         '500 27px system-ui, sans-serif',
         '#7c8594',
         0,
@@ -966,7 +1260,7 @@ export class Game {
     const att = d.currentAttack;
     const e = d.enemy;
     const t = this.lastT;
-    const teach = this.settings.callouts || this.run.fight === 0;
+    const teach = this.settings.callouts || this.run.fight === 0 || this.training;
     // Must-dodge attacks are always named: they arrive after the Trainer and can't be blocked.
     const swing = this.phase === 'fight' && !!att && (teach || att.perilous !== 'none') && e.state === 'attack' && !e.struck;
     const result = !swing && this.settings.results && t - this.lastResult.t < 1100;
@@ -1163,8 +1457,8 @@ function copyPose(o: SwordPose, a: SwordPose): void {
 
 /** [title, how to block, colour] for an attack's callout. Left/right = the side of YOU it lands on. */
 function calloutFor(a: AttackDef): [string, string, string] {
-  if (a.perilous === 'thrust') return ['THRUST', 'Lean left or right!', COLORS.hit];
-  if (a.perilous === 'sweep') return ['SWEEP', 'Duck!', COLORS.hit];
+  if (a.perilous === 'thrust') return ['THRUST', 'Lean or dash sideways!', COLORS.hit];
+  if (a.perilous === 'sweep') return ['SWEEP', 'Duck or dash back!', COLORS.hit];
   if (a.dir === 'high') return ['↓  VERTICAL', 'Block: sword flat above your head', COLORS.info];
   if (a.dir === 'low') return ['LOW CUT', 'Block: sword low, tip down', COLORS.info];
   const side = a.dir === 'left' ? 'LEFT' : 'RIGHT';

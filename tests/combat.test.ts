@@ -301,6 +301,82 @@ describe('perilous attacks and dodges', () => {
   });
 });
 
+describe('dash', () => {
+  const T = ATTACKS.thrust;
+  const TS = START + T.windupMs;
+  const SW = ATTACKS.sweep;
+
+  it('a side dash beats a thrust and opens a counter', () => {
+    const d = makeDuel();
+    script(d, T, START);
+    const evs = drive(d, () => POSES.neutral, TS + 50, 90, { dashAt: [[TS - 150, 'left']] });
+    expect(evs.some((e) => e.type === 'dodge' && e.dodge === 'dashLeft')).toBe(true);
+    expect(outcome(evs)?.type).toBe('dodged');
+    expect(d.player.counterUntil).toBeGreaterThan(TS);
+  });
+
+  it('a back dash beats a sweep, a side dash does not', () => {
+    const d1 = makeDuel();
+    script(d1, SW, START);
+    expect(outcome(drive(d1, () => POSES.neutral, 2500, 90, { dashAt: [[TS - 150, 'back']] }))?.type).toBe('dodged');
+    const d2 = makeDuel();
+    script(d2, SW, START);
+    expect(outcome(drive(d2, () => POSES.neutral, 2500, 90, { dashAt: [[TS - 150, 'right']] }))?.type).toBe('hit');
+  });
+
+  it('a forward dash does not get through a thrust', () => {
+    const d = makeDuel();
+    script(d, T, START);
+    expect(outcome(drive(d, () => POSES.neutral, 2500, 90, { dashAt: [[TS - 150, 'forward']] }))?.type).toBe('hit');
+  });
+
+  it('any dash dodges a normal swing, without a counter', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    const o = outcome(drive(d, () => POSES.neutral, 2200, 90, { dashAt: [[S - 150, 'forward']] }));
+    expect(o?.type).toBe('dodged');
+    expect(d.player.counterUntil).toBeLessThan(S);
+  });
+
+  it('a dash too early runs out of i-frames', () => {
+    const d = makeDuel();
+    script(d, L, START);
+    expect(outcome(drive(d, () => POSES.neutral, 2200, 90, { dashAt: [[S - 600, 'left']] }))?.type).toBe('hit');
+  });
+});
+
+describe('training dummy', () => {
+  it('without a guard every idle strike lands', () => {
+    const d = makeDuel({ guards: false });
+    expect(d.opening).toBe('all');
+    const evs = drive(d, () => POSES.neutral, 1000, 90, { strikeAt: [300, 700], zone: d.enemy.guardSide });
+    expect(evs.filter((e) => e.type === 'enemyHit')).toHaveLength(2);
+    expect(evs.some((e) => e.type === 'enemyBlock')).toBe(false);
+  });
+
+  it('with a guard, strikes on his sword side are deflected', () => {
+    const d = makeDuel();
+    const side = d.enemy.guardSide;
+    const evs = drive(d, () => POSES.neutral, 400, 90, { strikeAt: [300], zone: side });
+    expect(evs.some((e) => e.type === 'enemyBlock')).toBe(true);
+  });
+
+  it('practice refills HP instead of ending the fight', () => {
+    const d = makeDuel({ practice: true, guards: false });
+    d.enemy.hp = 1;
+    const evs = drive(d, () => POSES.neutral, 400, 90, { strikeAt: [300] });
+    expect(evs.some((e) => e.type === 'practiceReset' && e.who === 'enemy')).toBe(true);
+    expect(d.enemy.state).not.toBe('dead');
+    expect(d.enemy.hp).toBe(d.enemy.def.hp);
+
+    d.player.hp = 1;
+    script(d, L, d.enemy.clock + 10);
+    const evs2 = drive(d, () => POSES.neutral, d.time + 1000);
+    expect(evs2.some((e) => e.type === 'practiceReset' && e.who === 'player')).toBe(true);
+    expect(d.player.dead).toBe(false);
+  });
+});
+
 describe('posture and finisher', () => {
   it('repeated deflects break posture, then a strike is a finisher', () => {
     const d = makeDuel();
