@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Sfx } from './audio/sfx';
 import { DEFAULT_GUARD, MECH_DEFAULTS, PRESETS } from './core/config';
 import { makePose } from './core/guard';
-import { DEFAULT_LOADOUT, RELICS, WEAPONS, weaponById } from './core/loadout';
+import { BLADES, DEFAULT_LOADOUT, HANDLES, RELICS, WEAPONS, weaponById } from './core/loadout';
 import type { Loadout, Weapon } from './core/loadout';
 import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
@@ -22,6 +22,7 @@ import type { DummyMode } from './core/training';
 import { TRAIN_COLORS, drawCoach, drawTimeline } from './render/trainingPanels';
 import type { TimelineData } from './render/trainingPanels';
 import { HealAura, drawChipRow } from './render/leftHand';
+import { FloatText } from './render/floatText';
 import type { AbilityChip, LeftHandView } from './render/leftHand';
 import type { MenuItem } from './render/pauseMenu';
 import { headsetName, loadSettings, resolveQuality, saveSettings } from './settings';
@@ -226,6 +227,8 @@ export class Game {
   })();
   /** Heal: golden rings sweeping up around you. */
   private readonly healAura = new HealAura();
+  /** Words that pop at the clash point and rise (PERFECT, RIPOSTE...). */
+  private readonly floats = new FloatText();
   /** Point-aim mode: a line from your left hand showing where the arm will go (gold = on target). */
   private readonly aimLine = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
@@ -315,6 +318,7 @@ export class Game {
     for (const c of this.cards) this.space.group.add(c.mesh);
     this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
     this.lockOn.add(this.chargeRing);
+    scene.add(this.floats.group);
     scene.add(this.wire, this.lockOn, this.healAura.group, this.aimLine, this.blast.mesh);
     this.space.group.add(this.fatalPrompt.mesh, this.slash);
     this.aimLine.visible = false;
@@ -436,6 +440,7 @@ export class Game {
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
     this.updateLockOn(f.headPos);
     this.healAura.update(dt);
+    this.floats.update(dt, f.headPos);
     this.updateAimLine(f);
     this.updateFatalPrompt(t);
     if (this.leftHand) {
@@ -511,14 +516,14 @@ export class Game {
     if (f.hasSword && t >= this.strikeReadyAt && this.duel.enemy.state !== 'dead' && !f.flaskHeld) {
       const speed = this.prevTip.distanceTo(f.tip) / Math.max(1e-3, dt / 1000);
       const contact = this.enemyView.bodyHit(f.hilt, f.tip, this.space) || this.enemyView.bodyHit(this.prevTip, f.tip, this.space);
-      if (contact && (speed > STRIKE_MIN_SPEED || (!this.isXR && f.rightTrigger))) {
+      if (contact && (speed > this.strikeSpeed || (!this.isXR && f.rightTrigger))) {
         strikeSpeed = Math.max(speed, 2);
         strikeZone = zoneOf(this.space.toDuel(this.enemyView.hitPoint, this.tmpV3).x);
         // A poke drives the tip along the blade's own line instead of sweeping it sideways.
         const move = this.tmp.copy(f.tip).sub(this.prevTip);
         const along = this.tmp2.copy(f.tip).sub(f.hilt).normalize();
         strikePoke = move.length() > 1e-4 && move.normalize().dot(along) > POKE_ALIGN;
-      } else if (this.isXR && !contact && speed > STRIKE_MIN_SPEED && t >= this.whiffAt && this.phase === 'fight') {
+      } else if (this.isXR && !contact && speed > this.strikeSpeed && t >= this.whiffAt && this.phase === 'fight') {
         // A fast swing at him that falls short: say so, and by how much.
         const short = this.enemyView.bodyDist(f.hilt, f.tip, this.space) - BODY_R;
         if (short < 0.6 && this.swordCurr.tip.z > 0.3) this.whiff(short, t);
@@ -680,6 +685,7 @@ export class Game {
         this.enemyView.react('parried', this.duel);
         this.record(ev.offsetMs!, 'perfect', []);
         this.flashResult(n > 1 ? `PERFECT ×${n} CHAIN` : 'PERFECT', COLORS.perfect, t);
+        this.floats.pop(contact, n > 1 ? `PERFECT ×${n}` : 'PERFECT', COLORS.perfect);
         break;
       }
       case 'block': {
@@ -728,6 +734,7 @@ export class Game {
           this.input.pulse('left', 1, 110);
           this.waves.emit(this.tmp3.copy(f.headPos).add(this.tmp4.set(0, -0.2, 0)), 0xffd060, 0.9, 450);
           this.flashResult('PERFECT DODGE · COUNTER NOW!', COLORS.perfect, t);
+          this.floats.pop(this.enemyView.chestWorld(this.space, this.tmp3), 'PERFECT DODGE', COLORS.perfect);
         } else {
           this.sfx.play('dodge');
           this.flashResult(ev.perilous && ev.perilous !== 'none' ? 'DODGED · early, no counter' : 'DODGED', COLORS.block, t);
@@ -768,6 +775,7 @@ export class Game {
       case 'regain':
         this.sfx.play('chime', 0.3);
         this.flashResult(`+${Math.round(ev.damage ?? 0)} HP regained`, COLORS.open, t);
+        this.floats.pop(this.enemyView.hitPoint, `+${Math.round(ev.damage ?? 0)} HP`, '#fff2d8');
         break;
       case 'lockout':
         this.flashResult('Flailing: perfect parry locked', COLORS.hit, t);
@@ -784,6 +792,7 @@ export class Game {
           this.sparks.burst(this.enemyView.hitPoint, 0xff3010, 60, 3.2);
           this.waves.emit(this.enemyView.hitPoint, 0xff3030, 0.9, 500);
           this.flashResult(`FATAL ART · ${Math.round(ev.damage ?? 0)} damage`, COLORS.hit, t);
+          this.floats.pop(this.enemyView.hitPoint, `${Math.round(ev.damage ?? 0)}`, '#ff5040');
         }
         if (ev.opening) this.flashResult('OPENING · he covers that side now', COLORS.open, t);
         if (ev.riposte) {
@@ -792,10 +801,12 @@ export class Game {
           this.sparks.burst(this.enemyView.hitPoint, 0xffd700, 50, 2.8);
           this.waves.emit(this.enemyView.hitPoint, 0xffd700, 0.7, 380);
           this.flashResult(`RIPOSTE · ${Math.round(ev.damage ?? 0)} damage`, COLORS.perfect, t);
+          this.floats.pop(this.enemyView.hitPoint, 'RIPOSTE', COLORS.perfect);
         } else if (ev.charged) {
           this.input.pulse('right', 1, 120);
           this.waves.emit(this.enemyView.hitPoint, 0xfff2d0, 0.7, 380);
           this.flashResult(`CHARGED STRIKE · +${this.timing.chargePosture} posture`, '#fff2d0', t);
+          this.floats.pop(this.enemyView.hitPoint, 'CRUSH', '#fff2d0');
         }
         this.sfx.play('strike');
         this.enemyView.hit();
@@ -973,6 +984,11 @@ export class Game {
     ev.lungeMax = Math.max(0, Math.min(ATTACK_LUNGE, gap - (ENEMY_DIST - ATTACK_LUNGE)));
     this.gapNow = gap - ev.lunge;
     this.updateReachArc();
+  }
+
+  /** Tip speed a swing needs to count as a strike: the handle decides (weapon assembly). */
+  private get strikeSpeed(): number {
+    return this.weapon.strikeSpeed ?? STRIKE_MIN_SPEED;
   }
 
   /** Your reach depends on the weapon: arm + blade + his body radius. */
@@ -1554,86 +1570,103 @@ export class Game {
       { label: 'Tuning', hint: () => 'Dash, dodge, parry, flask numbers (saved)', act: () => this.pause.openSub('TUNING', this.tuningRows()) },
       {
         label: 'Left arm',
-        value: () => (s.leftArm === 'blast' ? 'Blast shot' : 'Grapple'),
-        hint: () => (s.leftArm === 'blast' ? 'Left trigger: a shot that interrupts his normal swings' : 'Left trigger: pull yourself in, tear his guard open'),
-        change: () => {
-          s.leftArm = s.leftArm === 'blast' ? 'grapple' : 'blast';
-          save();
-        },
+        value: () => `${s.leftArm === 'blast' ? 'Blast shot' : 'Grapple'} · ${s.armAim === 'point' ? 'point' : 'lock-on'}`,
+        hint: () => 'Which tool the left trigger fires, and how it aims',
+        act: () =>
+          this.pause.openSub('LEFT ARM', [
+            { label: 'Back', act: () => this.pause.back() },
+            {
+              label: 'Left arm',
+              value: () => (s.leftArm === 'blast' ? 'Blast shot' : 'Grapple'),
+              hint: () => (s.leftArm === 'blast' ? 'Left trigger: a shot that interrupts his normal swings' : 'Left trigger: pull yourself in, tear his guard open'),
+              change: () => {
+                s.leftArm = s.leftArm === 'blast' ? 'grapple' : 'blast';
+                save();
+              },
+            },
+            {
+              label: 'Left arm aim',
+              value: () => (s.armAim === 'point' ? 'Point (aim line)' : 'Lock-on'),
+              hint: () => (s.armAim === 'point' ? 'Goes where your left hand points; line turns gold on target' : 'Always goes to the enemy you are locked on to'),
+              change: () => {
+                s.armAim = s.armAim === 'point' ? 'lockon' : 'point';
+                save();
+              },
+            },
+          ]),
       },
       {
-        label: 'Left arm aim',
-        value: () => (s.armAim === 'point' ? 'Point (aim line)' : 'Lock-on'),
-        hint: () => (s.armAim === 'point' ? 'Goes where your left hand points; line turns gold on target' : 'Always goes to the enemy you are locked on to'),
-        change: () => {
-          s.armAim = s.armAim === 'point' ? 'lockon' : 'point';
-          save();
-        },
-      },
-      {
-        label: 'Lock-on marker',
-        value: () => onOff(s.lockOn),
-        change: () => {
-          s.lockOn = !s.lockOn;
-          save();
-        },
-      },
-      {
-        label: 'Reach marker',
-        value: () => onOff(s.reachMarker),
-        hint: () => 'Floor arc: how far your blade reaches (green = in range)',
-        change: () => {
-          s.reachMarker = !s.reachMarker;
-          save();
-        },
-      },
-      {
-        label: 'Swing guides',
-        value: () => onOff(s.guides),
-        hint: () => 'Ghost sword and swing path',
-        change: () => {
-          s.guides = !s.guides;
-          this.enemyView.guides = s.guides;
-          save();
-        },
-      },
-      {
-        hidden: this.training,
-        label: 'Swing names',
-        value: () => (s.callouts ? 'Always' : 'Trainer only'),
-        change: () => {
-          s.callouts = !s.callouts;
-          save();
-        },
-      },
-      {
-        label: 'Result text',
-        value: () => onOff(s.results),
-        hint: () => 'PERFECT / BLOCK above the enemy',
-        change: () => {
-          s.results = !s.results;
-          save();
-        },
-      },
-      {
-        label: 'Rumble',
-        value: () => (s.haptics <= 0 ? 'Off' : s.haptics < 1 ? 'Low' : 'Full'),
-        change: (d) => {
-          s.haptics = step([0, 0.5, 1], s.haptics, d);
-          save();
-          this.input.hapticScale = s.haptics;
-          this.input.pulse('right', 0.6, 60);
-        },
-      },
-      {
-        label: 'Graphics',
-        value: () => (s.quality === 'auto' ? `Auto (${resolveQuality('auto')})` : s.quality === 'high' ? 'High' : 'Low'),
-        hint: () => (this.isXR ? 'Low suits Quest 1 / 2 · sharpness changes next time you enter VR' : 'Low suits Quest 1 / 2'),
-        change: (d) => {
-          s.quality = step(qualities, s.quality, d);
-          save();
-          this.onGraphics(resolveQuality(s.quality));
-        },
+        label: 'Display & comfort',
+        hint: () => 'Lock-on, reach arc, guides, text, rumble, graphics',
+        act: () =>
+          this.pause.openSub('DISPLAY & COMFORT', [
+            { label: 'Back', act: () => this.pause.back() },
+            {
+              label: 'Lock-on marker',
+              value: () => onOff(s.lockOn),
+              change: () => {
+                s.lockOn = !s.lockOn;
+                save();
+              },
+            },
+            {
+              label: 'Reach marker',
+              value: () => onOff(s.reachMarker),
+              hint: () => 'Floor arc: how far your blade reaches (green = in range)',
+              change: () => {
+                s.reachMarker = !s.reachMarker;
+                save();
+              },
+            },
+            {
+              label: 'Swing guides',
+              value: () => onOff(s.guides),
+              hint: () => 'Ghost sword and swing path',
+              change: () => {
+                s.guides = !s.guides;
+                this.enemyView.guides = s.guides;
+                save();
+              },
+            },
+            {
+              hidden: this.training,
+              label: 'Swing names',
+              value: () => (s.callouts ? 'Always' : 'Trainer only'),
+              change: () => {
+                s.callouts = !s.callouts;
+                save();
+              },
+            },
+            {
+              label: 'Result text',
+              value: () => onOff(s.results),
+              hint: () => 'PERFECT / BLOCK above the enemy',
+              change: () => {
+                s.results = !s.results;
+                save();
+              },
+            },
+            {
+              label: 'Rumble',
+              value: () => (s.haptics <= 0 ? 'Off' : s.haptics < 1 ? 'Low' : 'Full'),
+              change: (d) => {
+                s.haptics = step([0, 0.5, 1], s.haptics, d);
+                save();
+                this.input.hapticScale = s.haptics;
+                this.input.pulse('right', 0.6, 60);
+              },
+            },
+            {
+              label: 'Graphics',
+              value: () => (s.quality === 'auto' ? `Auto (${resolveQuality('auto')})` : s.quality === 'high' ? 'High' : 'Low'),
+              hint: () => (this.isXR ? 'Low suits Quest 1 / 2 · sharpness changes next time you enter VR' : 'Low suits Quest 1 / 2'),
+              change: (d) => {
+                s.quality = step(qualities, s.quality, d);
+                save();
+                this.onGraphics(resolveQuality(s.quality));
+              },
+            },
+          ]),
       },
       {
         label: 'Re-center arena',
@@ -1772,6 +1805,59 @@ export class Game {
     ];
   }
 
+  /** Weapon page (training): a preset, or "Assembled" with Blade and Handle rows. */
+  private weaponRows(): MenuItem[] {
+    const cyc = (i: number, d: number, n: number) => (i + d + n) % n;
+    const rows: MenuItem[] = [
+      { label: 'Back', act: () => this.pause.back() },
+      {
+        label: 'Weapon',
+        value: () => (this.weapon.id.startsWith('asm:') ? 'Assembled' : this.weapon.name),
+        hint: () => (this.weapon.id.startsWith('asm:') ? 'Pick a blade and a handle below' : 'Blade length, damage and strike speed; or Assembled'),
+        change: (d) => {
+          // Presets, then "Assembled" (blade + handle).
+          const ids = [...WEAPONS.map((w) => w.id), this.lastAssembly];
+          const cur = this.weapon.id.startsWith('asm:') ? ids.length - 1 : ids.indexOf(this.weapon.id);
+          this.equipTraining(ids[cyc(cur, d, ids.length)]);
+        },
+      },
+      ...(['blade', 'handle'] as const).map((part): MenuItem => {
+        const list = part === 'blade' ? BLADES : HANDLES;
+        const idx = () => {
+          const [, b, h] = this.weapon.id.split(':');
+          return Math.max(0, list.findIndex((x) => x.id === (part === 'blade' ? b : h)));
+        };
+        return {
+          label: part === 'blade' ? '   Blade' : '   Handle',
+          hidden: !this.weapon.id.startsWith('asm:'),
+          value: () => list[idx()].name,
+          hint: () => this.weapon.desc,
+          change: (d) => {
+            const [, b, h] = this.weapon.id.split(':');
+            const next = list[cyc(idx(), d, list.length)].id;
+            this.equipTraining(part === 'blade' ? `asm:${next}:${h}` : `asm:${b}:${next}`);
+          },
+        };
+      }),
+    ];
+    return rows.filter((r) => !r.hidden);
+  }
+
+  /** Last assembled weapon, so cycling through the presets comes back to it. */
+  private lastAssembly = 'asm:edge:wrapped';
+
+  /** Swap the training weapon and restart the dummy fight with it (same dummy mode). */
+  private equipTraining(id: string): void {
+    if (id.startsWith('asm:')) this.lastAssembly = id;
+    this.loadout.weapon = id;
+    saveLoadout(this.loadout);
+    const mode = this.dummyMode;
+    this.startTraining(this.lastT);
+    this.dummyMode = mode;
+    this.pause.setItems(this.weaponRows()); // Blade/Handle rows appear or hide
+    this.pause.redraw();
+  }
+
   /** Training rows: what the dummy does, which swings, how fast, and your weapon. */
   private trainingRows(): MenuItem[] {
     const t = () => this.lastT;
@@ -1807,15 +1893,8 @@ export class Game {
       {
         label: 'Weapon',
         value: () => this.weapon.name,
-        hint: () => 'Blade length, damage and strike speed',
-        change: (d) => {
-          const i = WEAPONS.findIndex((w) => w.id === this.weapon.id);
-          this.loadout.weapon = WEAPONS[cyc(i, d, WEAPONS.length)].id;
-          saveLoadout(this.loadout);
-          const mode = this.dummyMode;
-          this.startTraining(t());
-          this.dummyMode = mode;
-        },
+        hint: () => 'Presets, or assemble a blade + handle',
+        act: () => this.pause.openSub('WEAPON', this.weaponRows()),
       },
     ];
   }
@@ -2186,7 +2265,7 @@ export class Game {
     this.trailClock += dt;
     const speed = this.prevTip.distanceTo(f.tip) / Math.max(1e-3, dt / 1000);
     // VR only: a desktop mouse teleports between guards, which would draw ribbons that aren't swings.
-    if (this.isXR && f.hasSword && speed > STRIKE_MIN_SPEED && (this.phase === 'fight' || this.phase === 'won')) {
+    if (this.isXR && f.hasSword && speed > this.strikeSpeed && (this.phase === 'fight' || this.phase === 'won')) {
       const counter = this.duel.time <= this.duel.player.counterUntil || this.duel.enemy.state === 'stagger';
       this.tmp2.copy(f.hilt).lerp(f.tip, 0.45);
       this.trailWhiffT = Math.max(0, this.trailWhiffT - dt / 400);

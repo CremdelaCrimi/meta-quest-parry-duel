@@ -50,6 +50,11 @@ export class PauseMenu {
     this.cursor = Math.min(this.cursor, items.length - 1);
   }
 
+  /** Redraw now (after rows changed outside update()). */
+  redraw(): void {
+    if (this.isOpen) this.draw();
+  }
+
   open(head: THREE.Vector3, q: THREE.Quaternion, page: 'main' | 'controls' = 'main'): void {
     // Level with the floor so the panel doesn't tilt with your head, a bit below eye height.
     this.fwd.set(0, 0, -1).applyQuaternion(q).setY(0);

@@ -108,7 +108,10 @@ with a short freeze. When he's broken the prompt reads **X · FINISH HIM**. When
 - Above him: his HP, posture, chain and frenzy. Floor arc: your reach (green = in range).
 
 ## Mechanics (menu → Mechanics, A/B test)
-Experimental mechanics you can switch on and off mid-fight (saved), each with its key number:
+Experimental mechanics you can switch on and off mid-fight (saved), each with its key number. The
+menu groups the rest into pages: **Left arm** (tool and aim) and **Display & comfort** (markers, guides,
+text, rumble, graphics). Results also pop as rising words at the clash point (PERFECT, RIPOSTE...).
+
 
 | Mechanic | Default | What it does |
 |---|---|---|
@@ -126,6 +129,26 @@ lockouts per minute, charges built vs used, Guard Regain HP won back. Reset them
 
 Picked with Gemini (2026-11-16, `docs/design/2026-11-16-gemini-research.md`) from Lies of P's
 delayed attacks, Fury attacks, charged attacks and Guard Regain and Sekiro's deflect rhythm.
+
+## Weapon assembly (training: menu → Weapon → Assembled)
+After Lies of P's blade + handle split (numbers from the Gemini consult). The **blade** sets reach,
+damage and posture; the **handle** sets how a swing must feel in VR: the tip speed a strike needs, the
+cooldown between strikes and the perfect-parry bonus.
+
+| Blade | Reach | Damage | Posture | Weight |
+|---|---|---|---|---|
+| Edge | 0.88 m | ×1 | ×1 | medium |
+| Stiletto | 0.55 m | ×0.65 (counters ×1.5) | ×0.7 | light |
+| Cleaver | 1.20 m | ×1.6 | ×1.5 | heavy |
+
+| Handle | Strike at | Cooldown | Perfect window | Weight |
+|---|---|---|---|---|
+| Wrapped grip | 1.8 m/s | ×1 | +0 ms | medium |
+| Fencer's grip | 2.5 m/s (wrist snap) | ×0.6 | +20 ms | light |
+| Pole shaft | 1.2 m/s (broad swings count) | ×1.8 | −20 ms | heavy |
+
+A **light ↔ heavy** pair (e.g. Cleaver on a Fencer's grip, the "wiggle a greatsword" exploit) is
+mismatched: +300 ms strike cooldown and no parry bonus. Medium parts pair with anything.
 
 ## Tuning (menu → Tuning)
 Every row steps a number and saves it at once (`parryDuel.settings`): dash i-frames (= dash time),
