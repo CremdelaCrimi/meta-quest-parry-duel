@@ -153,3 +153,18 @@ Audio spec highlights now in: tells spatialised at his body with an HRTF panner 
 Fury ignition, feint tick, his strikes, the perfect at the clash point), your own hits stay in your
 head. New sounds: **feint tick** (4-6 kHz, 50 ms, from the sword shoulder when a hold starts) and
 **Fury ignition** (rising 200 Hz → 1 kHz sizzle, 400 ms, from his core).
+
+## 9. Final review (Gemini saw the Phase 2 capture and the menu)
+
+| Problem | Our call |
+|---|---|
+| IK elbows can pop on extreme overhead windups | **fixed**: elbow smoothed (~25 ms) and kept on the upper-arm length |
+| Wrist watch dense at 13 cm; move HP outside the bezel | headset check first (HP in the centre may be fine at arm's length) |
+| No bloom on Quest: fake the core glow with additive planes | **built**: additive halo sprite over the core (Fury and Phase 2) |
+| Six sub-pages = pointer friction; use tabs along the frame edges | later (the menu is stick-driven, not a laser pointer, so fewer clicks than assumed) |
+| Phase 2 chest noise swallows the sword arm | **fixed**: darker ribs, brass joints stay brightest |
+
+**First headset test (Gemini):** Phase 2's Mainspring with the wrist HUD in use. Can you track the
+three clanks, the ember core and your wrist dials at once without clutter or dropped frames? If you
+miss the fourth-beat parry because you were reading a dial or distracted by steam, simplify the wrist
+and cut the steam.

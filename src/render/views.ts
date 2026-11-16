@@ -637,16 +637,23 @@ export class EnemyView {
       const late = toStrike <= 400;
       const pulse = 0.5 + 0.5 * Math.sin(duel.time / (late ? 45 : 120));
       P.coreMat.color.setRGB(1, 0.32 + 0.15 * pulse, 0.05).multiplyScalar(late ? 1 : 0.55);
+      const halo = P.coreHalo.material as THREE.SpriteMaterial;
+      halo.color.copy(P.coreMat.color);
+      halo.opacity = late ? 0.75 + 0.25 * pulse : 0.35;
+      P.coreHalo.scale.setScalar(late ? 0.45 + 0.1 * pulse : 0.3);
       P.opticMat.color.setHex(0xff5a14);
       this.bladeMat.emissive.setHex(0xff6a10);
       this.bladeMat.emissiveIntensity = late ? 1.2 + 0.6 * pulse : 0.5;
     } else {
       P.coreMat.color.setHex(e.state === 'stagger' ? 0x201008 : 0x5a3a10);
+      (P.coreHalo.material as THREE.SpriteMaterial).opacity = p2 && e.state !== 'stagger' ? 0.25 : 0;
       P.opticMat.color.setHex(e.state === 'stagger' ? 0x302010 : 0xffc860);
     }
   }
 
   private readonly elbowV = new THREE.Vector3();
+  private readonly elbowPrev = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly elbowInit = [false, false];
   private readonly poleV = new THREE.Vector3();
   private readonly dirV = new THREE.Vector3();
 
@@ -668,7 +675,15 @@ export class EnemyView {
     pole.addScaledVector(dir, -pole.dot(dir));
     if (pole.lengthSq() < 1e-6) pole.set(0, -1, 0);
     pole.normalize();
-    const elbow = this.elbowV.copy(sh).addScaledVector(dir, a).addScaledVector(pole, h);
+    const target = this.elbowV.copy(sh).addScaledVector(dir, a).addScaledVector(pole, h);
+    // Smooth the elbow (fast, ~25 ms) so a pole flip at full extension never pops it across.
+    const prev = this.elbowPrev[i];
+    if (!this.elbowInit[i]) {
+      prev.copy(target);
+      this.elbowInit[i] = true;
+    } else prev.lerp(target, 0.5);
+    // Keep the smoothed elbow on the upper-arm sphere around the shoulder.
+    const elbow = prev.sub(sh).setLength(L1).add(sh);
     placeSegment(upper, sh, elbow, this.v3);
     // The forearm reaches the hand even when the hilt is out of reach (it just stretches a little).
     placeSegment(fore, elbow, hand, this.v3);

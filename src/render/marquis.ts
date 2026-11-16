@@ -40,6 +40,8 @@ export interface MarquisParts {
   coat: THREE.Material;
   ribs: THREE.Material;
   core: THREE.Mesh;
+  /** Fake bloom: an additive halo sprite over the core, coloured and sized with it. */
+  coreHalo: THREE.Sprite;
   /** Brass rib hoops round the bare chest (Phase 2 only). */
   ribRings: THREE.Mesh[];
   /** Wind-up key on his back: spins faster as he winds up a swing. */
@@ -129,7 +131,8 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   const chest = add(new THREE.CylinderGeometry(0.25, 0.15, 0.44, 14), coat, 0, 1.4);
   chest.scale.z = 0.72;
   // Phase 2: under the coat, a copper frame with brass rib hoops.
-  const ribs = new THREE.MeshStandardMaterial({ color: 0x8a5a32, roughness: 0.45, metalness: 0.6, emissive: 0x2a0e04 });
+  // Kept darker than the brass joints so the sword arm reads against the busy chest (Gemini review).
+  const ribs = new THREE.MeshStandardMaterial({ color: 0x6a4428, roughness: 0.55, metalness: 0.5, emissive: 0x1a0802 });
   addRim(ribs, 0xffe0a0, 0.3);
   const ribRings: THREE.Mesh[] = [];
   for (const [y, r] of [[1.29, 0.19], [1.4, 0.215], [1.51, 0.24]] as const) {
@@ -147,6 +150,20 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   // The core: glows behind a brass ring under the chest (dim amber; ember-orange for a Fury swing).
   const coreMat = new THREE.MeshBasicMaterial({ color: 0x5a3a10 });
   const core = add(new THREE.SphereGeometry(0.06, 12, 8), coreMat, 0, 1.2, -0.08);
+  // No post-processing bloom on Quest: an additive radial sprite fakes the glow.
+  const hc = document.createElement('canvas');
+  hc.width = hc.height = 64;
+  const hg = hc.getContext('2d')!;
+  const grd = hg.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.3, 'rgba(255,255,255,0.45)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  hg.fillStyle = grd;
+  hg.fillRect(0, 0, 64, 64);
+  const coreHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(hc), color: 0xff6a10, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0 }));
+  coreHalo.position.set(0, 1.2, -0.14);
+  coreHalo.scale.setScalar(0.35);
+  body.add(coreHalo);
   add(new THREE.TorusGeometry(0.07, 0.014, 6, 16), brass, 0, 1.2, -0.11);
   // Coat tails, crimson-lined, flaring behind.
   const tails: THREE.Mesh[] = [];
@@ -207,5 +224,5 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   const puff = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), puffMat);
   puff.visible = false;
   body.add(puff);
-  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, tails, chest, shirt, coat, ribs, core, ribRings, key, puff, puffMat };
+  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, tails, chest, shirt, coat, ribs, core, coreHalo, ribRings, key, puff, puffMat };
 }
