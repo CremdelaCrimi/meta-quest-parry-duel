@@ -34,6 +34,14 @@ export interface MarquisParts {
   cup: THREE.Mesh;
   /** Coat tails and linings: dropped in Phase 2, showing the clockwork. */
   tails: THREE.Mesh[];
+  /** Chest (coat), shirt front and cravat: in Phase 2 the chest turns to bare iron ribs. */
+  chest: THREE.Mesh;
+  shirt: THREE.Mesh[];
+  coat: THREE.Material;
+  ribs: THREE.Material;
+  core: THREE.Mesh;
+  /** Brass rib hoops round the bare chest (Phase 2 only). */
+  ribRings: THREE.Mesh[];
   /** Wind-up key on his back: spins faster as he winds up a swing. */
   key: THREE.Group;
   /** A puff that marks the start of a feint's hold at the sword shoulder. */
@@ -120,12 +128,25 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   }
   const chest = add(new THREE.CylinderGeometry(0.25, 0.15, 0.44, 14), coat, 0, 1.4);
   chest.scale.z = 0.72;
+  // Phase 2: under the coat, a copper frame with brass rib hoops.
+  const ribs = new THREE.MeshStandardMaterial({ color: 0x8a5a32, roughness: 0.45, metalness: 0.6, emissive: 0x2a0e04 });
+  addRim(ribs, 0xffe0a0, 0.3);
+  const ribRings: THREE.Mesh[] = [];
+  for (const [y, r] of [[1.29, 0.19], [1.4, 0.215], [1.51, 0.24]] as const) {
+    const ring = add(new THREE.TorusGeometry(r, 0.016, 5, 20), brass, 0, y);
+    ring.rotation.x = Math.PI / 2;
+    ring.scale.y = 0.78; // follows the chest's flattened depth (rotated: y is depth)
+    ring.visible = false;
+    ribRings.push(ring);
+  }
   // Shirt front and crimson cravat.
-  add(new THREE.BoxGeometry(0.11, 0.28, 0.02), ivory, 0, 1.43, -0.155);
-  add(new THREE.BoxGeometry(0.05, 0.08, 0.025), crimson, 0, 1.53, -0.165);
+  const shirt = [
+    add(new THREE.BoxGeometry(0.11, 0.28, 0.02), ivory, 0, 1.43, -0.155),
+    add(new THREE.BoxGeometry(0.05, 0.08, 0.025), crimson, 0, 1.53, -0.165),
+  ];
   // The core: glows behind a brass ring under the chest (dim amber; ember-orange for a Fury swing).
   const coreMat = new THREE.MeshBasicMaterial({ color: 0x5a3a10 });
-  add(new THREE.SphereGeometry(0.06, 12, 8), coreMat, 0, 1.2, -0.08);
+  const core = add(new THREE.SphereGeometry(0.06, 12, 8), coreMat, 0, 1.2, -0.08);
   add(new THREE.TorusGeometry(0.07, 0.014, 6, 16), brass, 0, 1.2, -0.11);
   // Coat tails, crimson-lined, flaring behind.
   const tails: THREE.Mesh[] = [];
@@ -186,5 +207,5 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   const puff = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), puffMat);
   puff.visible = false;
   body.add(puff);
-  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, tails, key, puff, puffMat };
+  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, tails, chest, shirt, coat, ribs, core, ribRings, key, puff, puffMat };
 }

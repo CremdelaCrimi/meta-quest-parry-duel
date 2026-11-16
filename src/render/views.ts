@@ -601,7 +601,11 @@ export class EnemyView {
     P.key.rotation.z = this.gearSpin * (p2 ? 1.5 : 0.5);
     // Phase 2: the coat tails are gone, the clockwork shows, and the cogs run oversized.
     for (const m of P.tails) m.visible = !p2;
+    for (const m of P.shirt) m.visible = !p2;
     for (const c of P.cogs) c.scale.setScalar(p2 ? 1.3 : 1);
+    P.chest.material = p2 ? P.ribs : P.coat; // coat torn away: bare iron ribs
+    P.core.scale.setScalar(p2 ? 1.6 : 1);
+    for (const r of P.ribRings) r.visible = p2;
     // Mainspring: he sinks into a coiled squat and the key ratchets BACK a notch on each clank.
     if (winding && att!.id === 'mainspring') {
       const since = e.clock - e.attackStart;
