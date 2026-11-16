@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CanvasPanel, brassFrame, roundRect } from './panels';
+import { CanvasPanel, roundRect } from './panels';
 
 /** One ability chip on the wrist / status strip. */
 export interface AbilityChip {
@@ -19,7 +19,7 @@ export interface AbilityChip {
  */
 export class LeftHandView {
   readonly root = new THREE.Group();
-  readonly wrist = new CanvasPanel(512, 384, 0.13); // ≥ 0.13 m so it reads at arm's length
+  readonly wrist = new CanvasPanel(512, 512, 0.13); // a round watch, ≥ 0.13 m so it reads at arm's length
   private readonly fingers: THREE.Object3D[] = [];
   private readonly thumb: THREE.Object3D;
   private readonly gourd = new THREE.Group();
@@ -97,20 +97,98 @@ export class LeftHandView {
     this.gourdMat.emissive.setRGB(drink * 0.5, drink * 0.1, drink * 0.1);
   }
 
-  /** Redraw the wrist panel (call at a few Hz: texture uploads aren't free). */
-  drawWrist(chips: AbilityChip[], drink: number): void {
+  /**
+   * Redraw the wrist watch (call at a few Hz: texture uploads aren't free). A round brass pocket-watch
+   * face (Gemini mock-up): one sub-dial per ability around the rim, each a radial cooldown sweep, and
+   * the centre shows your HP, or the drink filling while you heal.
+   */
+  drawWrist(chips: AbilityChip[], drink: number, hp = 1): void {
     this.wrist.draw((ctx, w, h) => {
-      brassFrame(ctx, 0, 0, w, h, 0.9);
-      drawChips(ctx, chips, 16, 16, w - 32, (h - 32 - (drink > 0 ? 44 : 0)) / chips.length);
-      if (drink > 0) {
-        ctx.fillStyle = 'rgba(255,255,255,0.15)';
-        ctx.fillRect(16, h - 44, w - 32, 26);
-        ctx.fillStyle = '#ff6a6a';
-        ctx.fillRect(16, h - 44, (w - 32) * drink, 26);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '700 22px system-ui, sans-serif';
-        ctx.fillText('HEALING', 26, h - 24);
+      const cx = w / 2;
+      const cy = h / 2;
+      const R = w / 2 - 8;
+      // Bezel and face.
+      const grd = ctx.createRadialGradient(cx - R * 0.3, cy - R * 0.3, R * 0.2, cx, cy, R);
+      grd.addColorStop(0, '#e2c27a');
+      grd.addColorStop(1, '#8a6a2a');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(16,20,24,0.96)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, R - 18, 0, Math.PI * 2);
+      ctx.fill();
+      // Minute ticks.
+      ctx.strokeStyle = 'rgba(197,160,89,0.55)';
+      ctx.lineWidth = 3;
+      for (let i = 0; i < 60; i += 5) {
+        const a = (i / 60) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.sin(a) * (R - 24), cy - Math.cos(a) * (R - 24));
+        ctx.lineTo(cx + Math.sin(a) * (R - 36), cy - Math.cos(a) * (R - 36));
+        ctx.stroke();
       }
+      // Sub-dials around the rim, starting at 12 o'clock.
+      const n = Math.max(1, chips.length);
+      const ring = R * 0.56;
+      const r = Math.min(66, ((Math.PI * ring) / n) * 0.82);
+      chips.forEach((c, i) => {
+        const a = (i / n) * Math.PI * 2;
+        const x = cx + Math.sin(a) * ring;
+        const y = cy - Math.cos(a) * ring;
+        const ready = c.ready >= 1;
+        ctx.fillStyle = 'rgba(255,255,255,0.07)';
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        // Readiness sweep, clockwise from 12.
+        const f = Math.max(0, Math.min(1, c.ready));
+        ctx.strokeStyle = c.color;
+        ctx.globalAlpha = ready ? 1 : 0.55;
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        ctx.arc(x, y, r - 6, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        if (ready) {
+          ctx.fillStyle = c.color;
+          ctx.globalAlpha = 0.25;
+          ctx.beginPath();
+          ctx.arc(x, y, r - 11, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        ctx.textAlign = 'center';
+        ctx.fillStyle = ready ? '#f2ede0' : '#9aa3b0';
+        ctx.font = `700 ${Math.round(r * 0.24)}px system-ui, sans-serif`;
+        ctx.fillText(c.name.split(':')[0].toUpperCase(), x, y - r * 0.42);
+        ctx.fillStyle = ready ? '#ffffff' : '#cfd4dc';
+        ctx.font = `800 ${Math.round(r * 0.46)}px system-ui, sans-serif`;
+        ctx.fillText(c.key, x, y + r * 0.14);
+        ctx.fillStyle = ready ? c.color : '#9aa3b0';
+        ctx.font = `700 ${Math.round(r * 0.34)}px system-ui, sans-serif`;
+        ctx.fillText(c.text, x, y + r * 0.55);
+        ctx.textAlign = 'left';
+      });
+      // Centre: the drink while healing, otherwise your HP.
+      const cr = R * 0.22;
+      const healing = drink > 0;
+      const f = healing ? drink : Math.max(0, Math.min(1, hp));
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 12;
+      ctx.beginPath();
+      ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = healing ? '#ffd060' : '#e04848';
+      ctx.beginPath();
+      ctx.arc(cx, cy, cr, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2);
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#f2ede0';
+      ctx.font = `800 ${Math.round(cr * 0.62)}px system-ui, sans-serif`;
+      ctx.fillText(healing ? 'HEAL' : `${Math.round(f * 100)}`, cx, cy + cr * 0.22);
+      ctx.textAlign = 'left';
     });
   }
 }

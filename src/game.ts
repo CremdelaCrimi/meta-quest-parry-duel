@@ -454,7 +454,7 @@ export class Game {
     if (this.leftHand) {
       this.leftHand.update(f.leftSqueeze, f.flaskHeld, this.drinkMs / this.tune('healMs'), dt);
       if (t >= this.wristAt) {
-        this.leftHand.drawWrist(this.abilityChips(), this.drinkMs / this.tune('healMs'));
+        this.leftHand.drawWrist(this.abilityChips(), this.drinkMs / this.tune('healMs'), this.duel.player.hp / this.duel.player.hpMax);
         this.wristAt = t + 150;
       }
     }
