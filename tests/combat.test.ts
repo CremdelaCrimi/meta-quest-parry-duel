@@ -494,6 +494,82 @@ describe('blast shot', () => {
   });
 });
 
+describe('mechanic toggles', () => {
+  const T = PRESET_SEKIRO_LIKE;
+  it('feints hold the windup: the usual timing is now early', () => {
+    const timing = { ...T, feintChance: 1, feintMinMs: 300, feintMaxMs: 300 };
+    const d = makeDuel({ timing, mech: { feints: true } });
+    script(d, L, START);
+    expect(outcome(drive(d, guardAt(POSES.left, S - 60), 2400))?.faults).toContain('early');
+    const d2 = makeDuel({ timing, mech: { feints: true } });
+    script(d2, L, START);
+    const evs = drive(d2, guardAt(POSES.left, S + 300 - 60), 2400);
+    expect(d2.enemy.feintMs).toBe(300);
+    expect(outcome(evs)?.type).toBe('perfect');
+  });
+
+  it('a Fury swing can only be perfect-parried', () => {
+    const timing = { ...T, furyChance: 1 };
+    const blocked = makeDuel({ timing, mech: { fury: true } });
+    script(blocked, L, START);
+    const o = outcome(drive(blocked, guardAt(POSES.left, S - 200), 2200));
+    expect(o?.type).toBe('hit');
+    expect(o?.faults).toContain('fury');
+    const dodged = makeDuel({ timing, mech: { fury: true } });
+    script(dodged, L, START);
+    expect(outcome(drive(dodged, () => POSES.neutral, 2200, 90, { dashAt: [[S - 100, 'left']] }))?.type).toBe('hit');
+    const parried = makeDuel({ timing, mech: { fury: true } });
+    script(parried, L, START);
+    expect(outcome(drive(parried, guardAt(POSES.left, S - 60), 2200))?.type).toBe('perfect');
+  });
+
+  it('a riposte right after a perfect is a critical; later it is a plain counter', () => {
+    for (const [at, crit] of [[S + 300, true], [S + 650, false]] as const) {
+      const d = makeDuel({ mech: { riposte: true } });
+      script(d, L, START);
+      const evs = drive(d, guardAt(POSES.left, S - 60), S + 900, 90, { strikeAt: [at] });
+      const hit = evs.find((e) => e.type === 'enemyHit');
+      expect(hit?.riposte).toBe(crit);
+      expect(hit?.damage).toBeCloseTo(T.playerDamage * (crit ? T.riposteDamageMult : 1.5));
+    }
+  });
+
+  it('holding the blade still charges a strike that crushes posture even when deflected', () => {
+    const d = makeDuel({ mech: { charge: true } });
+    const evs = drive(d, () => POSES.neutral, 1600, 90, { heldAt: () => false, strikeAt: [1500], zone: 'center' });
+    expect(evs.some((e) => e.type === 'charged')).toBe(true);
+    const blk = evs.find((e) => e.type === 'enemyBlock');
+    expect(blk?.charged).toBe(true);
+    expect(d.enemy.posture).toBeGreaterThanOrEqual(T.chargePosture);
+    // Holding block never charges.
+    const g = makeDuel({ mech: { charge: true } });
+    expect(drive(g, () => POSES.neutral, 1600, 90, { heldAt: () => true }).some((e) => e.type === 'charged')).toBe(false);
+  });
+
+  it('Guard Regain: a block chips HP that a quick hit wins back', () => {
+    const d = makeDuel({ mech: { guardRegain: true } });
+    script(d, L, START);
+    const evs = drive(d, guardAt(POSES.left, S - 200), S + 300);
+    const blk = evs.find((e) => e.type === 'block');
+    const chip = L.damage * T.regainChip;
+    expect(blk?.damage).toBeCloseTo(chip);
+    expect(d.player.hp).toBeCloseTo(T.playerHp - chip);
+    const more = drive(d, () => POSES.neutral, S + 500, 90, { strikeAt: [S + 400] });
+    expect(more.find((e) => e.type === 'regain')?.damage).toBeCloseTo(Math.min(chip, T.playerDamage));
+  });
+
+  it('spam lock can be switched off', () => {
+    const flail = schedule([
+      [100, POSES.left], [160, POSES.neutral], [220, POSES.right], [280, POSES.neutral],
+      [340, POSES.left], [400, POSES.neutral], [460, POSES.right], [520, POSES.neutral], [580, POSES.left],
+    ]);
+    const on = drive(makeDuel(), flail, 800);
+    expect(on.some((e) => e.type === 'lockout')).toBe(true);
+    const off = drive(makeDuel({ mech: { spamLock: false } }), flail, 800);
+    expect(off.some((e) => e.type === 'lockout')).toBe(false);
+  });
+});
+
 describe('training dummy', () => {
   it('without a guard every idle strike lands', () => {
     const d = makeDuel({ guards: false });

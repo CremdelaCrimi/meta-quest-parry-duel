@@ -1,4 +1,7 @@
-import type { GuardConfig, Modifiers, TimingConfig } from './types';
+import type { GuardConfig, Mechanics, Modifiers, TimingConfig } from './types';
+
+/** Default mechanic toggles (Gemini consult 2026-11-16: feints, riposte and spam lock on; the rest off). */
+export const MECH_DEFAULTS: Mechanics = { feints: true, fury: false, riposte: true, spamLock: true, charge: false, guardRegain: false };
 
 // Starting values are guesses meant to be tuned in the headset using the parry-offset readout.
 // Everything that affects feel lives here so tuning never touches logic.
@@ -48,6 +51,22 @@ const BASE: Omit<TimingConfig, 'name'> = {
   fatalArmMs: 2500,
   fatalDamageMult: 4,
   fatalPosture: 40,
+  feintChance: 0.35,
+  feintMinMs: 150,
+  feintMaxMs: 400,
+  furyChance: 0.25,
+  furyPostureMult: 1.5,
+  riposteMs: 400,
+  riposteDamageMult: 2.2,
+  ripostePosture: 25,
+  chargeMs: 1200,
+  chargeStillSpeed: 0.35,
+  chargeKeepMs: 900,
+  chargeDamageMult: 1.6,
+  chargePosture: 30,
+  regainChip: 0.5,
+  regainMs: 2500,
+  regainPerHit: 1,
   perfectDodgePosture: 30,
   grappleCooldownMs: 3000,
   grapplePlayerPosture: 20,

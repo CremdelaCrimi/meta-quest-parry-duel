@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { Duel } from '../core/sim';
 import type { AttackDef, SwordPose, V3 } from '../core/types';
 import { ATTACK_LUNGE, DuelSpace, ENEMY_DIST } from './duelSpace';
+import { MARQUIS, buildMarquis } from './marquis';
+import type { MarquisParts } from './marquis';
 import { RiggedEnemy } from './riggedEnemy';
 
 const D = ENEMY_DIST;
@@ -137,6 +139,9 @@ export class SwordView {
   guarding = false;
   /** Fatal Art armed: the blade burns red until the heavy strike lands. */
   fatal = false;
+  /** Riposte window open (gold glint runs down the blade) / charged strike ready (white-hot). */
+  riposte = false;
+  charged = false;
   private fatalT = 0;
 
   update(dtMs: number): void {
@@ -149,6 +154,16 @@ export class SwordView {
     if (this.fatal) {
       this.bladeMat.emissive.setHex(0xff2a10);
       this.bladeMat.emissiveIntensity = 1.2 + 0.5 * Math.sin(this.fatalT / 70);
+      return;
+    }
+    if (this.riposte) {
+      this.bladeMat.emissive.setHex(0xffd700);
+      this.bladeMat.emissiveIntensity = 1 + 0.6 * Math.sin(this.fatalT / 40);
+      return;
+    }
+    if (this.charged) {
+      this.bladeMat.emissive.setHex(0xfff2d0);
+      this.bladeMat.emissiveIntensity = 0.8 + 0.3 * Math.sin(this.fatalT / 90);
       return;
     }
     this.bladeMat.emissive.setHex(0x3a8cff);
@@ -301,6 +316,11 @@ export class EnemyView {
   private readonly target: SwordPose = key([0, 0, 0, 0, 0, 0]);
   private hitFlash = 0;
   private deadT = 0;
+  private readonly parts: MarquisParts;
+  /** Shoulder-gear spin (rad) and the attack whose feint puff already played. */
+  private gearSpin = 0;
+  private puffT = -1;
+  private puffAttack = NaN;
 
   private readonly v1 = new THREE.Vector3();
   private readonly v2 = new THREE.Vector3();
@@ -309,19 +329,9 @@ export class EnemyView {
   constructor() {
     this.root.add(this.body);
     const m = this.bodyMat;
-    const sash = new THREE.MeshLambertMaterial({ color: 0x8a1c1c });
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number) => {
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(x, y, 0);
-      this.body.add(mesh);
-      return mesh;
-    };
-    // Body is built floor-relative (y=0 at the floor) at the enemy's position.
-    add(new THREE.CylinderGeometry(0.17, 0.2, 0.9, 12), m, 0, 0.45);
-    add(new THREE.CylinderGeometry(0.21, 0.17, 0.65, 12), m, 0, 1.22);
-    add(new THREE.CylinderGeometry(0.205, 0.205, 0.08, 12), sash, 0, 0.93);
-    add(new THREE.SphereGeometry(0.12, 16, 12), m, 0, 1.66);
-    add(new THREE.CylinderGeometry(0.0, 0.32, 0.12, 16), new THREE.MeshLambertMaterial({ color: 0x6b5a3a }), 0, 1.79); // hat
+    // Body is built floor-relative (y=0 at the floor) at the enemy's position: The Brass Marquis.
+    this.parts = buildMarquis(this.body, m);
+    this.root.add(this.parts.cup);
 
     const armGeo = new THREE.CylinderGeometry(0.045, 0.04, 1, 8);
     armGeo.translate(0, 0.5, 0);
@@ -438,7 +448,8 @@ export class EnemyView {
     const k = Math.min(1, Math.max(0, toWindow / RING_LEAD_MS));
     this.ring.scale.setScalar(RING_END_M + (RING_START_M - RING_END_M) * k);
     this.ring.visible = toWindow < RING_LEAD_MS;
-    const col = inWindow ? 0xffd34d : 0x7fe0ff;
+    // A Fury swing can't be blocked: its guide is ember-orange until the perfect window opens.
+    const col = inWindow ? 0xffd34d : e.fury ? 0xff7a1a : 0x7fe0ff;
     this.ghostMat.color.setHex(col);
     this.ringMat.color.setHex(col);
     this.ghostMat.opacity = inWindow ? 0.95 : 0.3 + 0.4 * p;
@@ -524,10 +535,65 @@ export class EnemyView {
     try {
       this.rigged = await RiggedEnemy.load(manifestUrl, this.bladeMat);
       this.root.add(this.rigged.root);
-      this.body.visible = this.blade.visible = false;
+      this.body.visible = this.blade.visible = this.parts.cup.visible = false;
       for (const a of this.arms) a.visible = false;
     } catch (err) {
       console.info('[enemy] using procedural enemy:', (err as Error).message);
+    }
+  }
+
+  /**
+   * Clockwork tells. Shoulder gears spin through a windup and stall for a feint's hold (with a puff
+   * at the sword shoulder when the hold starts); waist cogs tick over; a Fury swing lights his core,
+   * optic and blade ember-orange for its last 400 ms (dimmer before that).
+   */
+  private updateClockwork(duel: Duel, dtMs: number, animMs: number): void {
+    const e = duel.enemy;
+    const att = duel.currentAttack;
+    const P = this.parts;
+    const winding = !!att && e.state === 'attack' && !e.struck;
+    let hold = false;
+    let toStrike = Infinity;
+    if (winding) {
+      const w = duel.windup(att!);
+      const since = e.clock - e.attackStart;
+      toStrike = w - since;
+      const swingMs = Math.min(0.5 * w, SWING_MS);
+      const holdEnd = w - swingMs - COIL_MS;
+      const holdStart = holdEnd - e.feintMs;
+      hold = e.feintMs > 0 && since >= holdStart && since < holdEnd;
+      if (hold && this.puffAttack !== e.attackStart) {
+        this.puffAttack = e.attackStart;
+        this.puffT = 0;
+        const side = Math.sign(KEYS[kindOf(att!)].windup.tip.x) || 1;
+        P.puff.position.set(-side * MARQUIS.shoulderX, MARQUIS.shoulderY + 0.05, 0);
+      }
+    }
+    this.gearSpin += (animMs / 1000) * (hold ? 0 : winding ? 9 : 1.2);
+    for (const r of P.shoulderRings) r.rotation.x = this.gearSpin;
+    P.cogs[0].rotation.z = this.gearSpin * 0.6;
+    P.cogs[1].rotation.z = -this.gearSpin * 0.8;
+    P.key.rotation.z = this.gearSpin * 0.5;
+    if (this.puffT >= 0) {
+      this.puffT += dtMs;
+      const k = this.puffT / 320;
+      P.puff.visible = k < 1;
+      P.puff.scale.setScalar(0.5 + 1.5 * k);
+      P.puffMat.opacity = 0.55 * (1 - k);
+      if (k >= 1) this.puffT = -1;
+    }
+    // Fury: ember core, optic and blade. Dim through the windup, blazing for the last 400 ms.
+    const fury = winding && e.fury;
+    if (fury) {
+      const late = toStrike <= 400;
+      const pulse = 0.5 + 0.5 * Math.sin(duel.time / (late ? 45 : 120));
+      P.coreMat.color.setRGB(1, 0.32 + 0.15 * pulse, 0.05).multiplyScalar(late ? 1 : 0.55);
+      P.opticMat.color.setHex(0xff5a14);
+      this.bladeMat.emissive.setHex(0xff6a10);
+      this.bladeMat.emissiveIntensity = late ? 1.2 + 0.6 * pulse : 0.5;
+    } else {
+      P.coreMat.color.setHex(e.state === 'stagger' ? 0x201008 : 0x5a3a10);
+      P.opticMat.color.setHex(e.state === 'stagger' ? 0x302010 : 0xffc860);
     }
   }
 
@@ -739,10 +805,14 @@ export class EnemyView {
     const hilt = DuelSpace.toLocal({ x: ph.x + fx * k, y: ph.y, z: ph.z + this.footZ * k }, this.v1);
     const tip = DuelSpace.toLocal({ x: pt.x + fx * k, y: pt.y, z: pt.z + this.footZ * k }, this.v2);
     placeSegment(this.blade, hilt, tip, this.v3);
-    const shoulderY = -space.height + 1.45;
+    // Cup guard sits just up the blade from the hilt, dome toward the tip.
+    this.parts.cup.position.copy(hilt).lerp(tip, 0.03);
+    this.parts.cup.quaternion.copy(this.blade.quaternion);
+    this.parts.cup.visible = !this.rigged;
+    const shoulderY = -space.height + MARQUIS.shoulderY;
     for (let i = 0; i < 2; i++) {
       // Shoulders turn with the torso (local rotation.y = twist maps to duel z = x0·sin(twist)).
-      const x0 = i === 0 ? -0.2 : 0.2;
+      const x0 = i === 0 ? -MARQUIS.shoulderX : MARQUIS.shoulderX;
       const tw = this.body.rotation.y;
       const sh = DuelSpace.toLocal({ x: fx + x0 * Math.cos(tw), y: shoulderY, z: Dz - 0.02 + x0 * Math.sin(tw) }, this.v2);
       placeSegment(this.arms[i], sh, hilt, this.v3);
@@ -759,6 +829,7 @@ export class EnemyView {
     this.bladeMat.emissive.setHex(peril ? 0xff2020 : 0xffffff);
     // Always faintly lit so the blade reads against the dark arena; brightens toward the strike.
     this.bladeMat.emissiveIntensity = peril ? 0.5 + glow : 0.25 + glow * glow * 0.9;
+    this.updateClockwork(duel, dtMs, animMs);
     if (frozen) {
       // Parried blade flares gold for the length of the freeze.
       this.bladeMat.emissive.setHex(0xffc040);

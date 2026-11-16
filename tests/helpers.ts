@@ -1,7 +1,7 @@
 import { DEFAULT_GUARD, PRESET_SEKIRO_LIKE, defaultModifiers } from '../src/core/config';
 import { lerpPose, makePose } from '../src/core/guard';
 import { Duel } from '../src/core/sim';
-import type { AttackDef, DashDir, DuelEvent, EnemyDef, StrikeZone, SwordPose, TimingConfig, V3 } from '../src/core/types';
+import type { AttackDef, DashDir, DuelEvent, EnemyDef, Mechanics, StrikeZone, SwordPose, TimingConfig, V3 } from '../src/core/types';
 
 const P = (hx: number, hy: number, hz: number, tx: number, ty: number, tz: number): SwordPose => ({
   hilt: { x: hx, y: hy, z: hz },
@@ -31,7 +31,7 @@ export const TEST_ENEMY: EnemyDef = {
  * snap into place just before the strike) measure timing alone; steadiness has its own tests.
  */
 export function makeDuel(
-  opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number; steady?: boolean; guards?: boolean; practice?: boolean } = {},
+  opts: { timing?: TimingConfig; enemy?: EnemyDef; ai?: boolean; seed?: number; steady?: boolean; guards?: boolean; practice?: boolean; mech?: Partial<Mechanics> } = {},
 ): Duel {
   const timing = opts.timing ?? PRESET_SEKIRO_LIKE;
   return new Duel({
@@ -43,6 +43,8 @@ export function makeDuel(
     ai: opts.ai ?? false,
     guards: opts.guards,
     practice: opts.practice,
+    // Scripted tests assume exact windups: new mechanics are off unless a test turns them on.
+    mech: { feints: false, fury: false, riposte: false, spamLock: true, charge: false, guardRegain: false, ...opts.mech },
   });
 }
 

@@ -2,6 +2,8 @@
  * Player settings, changed from the in-game menu (Y) and remembered between visits (localStorage).
  * URL parameters still win at startup (?preset=, ?guides=0, ?callouts=1, ?results=0, ?quality=low).
  */
+import type { Mechanics } from './core/types';
+
 export type Quality = 'auto' | 'high' | 'low';
 
 export interface Settings {
@@ -23,19 +25,22 @@ export interface Settings {
   leftArm: 'grapple' | 'blast';
   /** Left-arm aiming: at the locked-on enemy automatically, or where your left hand points (with an aim line). */
   armAim: 'lockon' | 'point';
+  /** Mechanic toggles (menu → Mechanics); missing keys use the defaults. */
+  mech: Partial<Mechanics>;
   /** Tuning editor overrides (menu → Tuning): timing fields and game-side values, by name. */
   tuning: Record<string, number>;
 }
 
 const KEY = 'parryDuel.settings';
 
-export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true, lockOn: true, leftArm: 'grapple', armAim: 'lockon', tuning: {} };
+export const DEFAULT_SETTINGS: Settings = { presetIdx: 0, guides: true, callouts: false, results: true, quality: 'auto', haptics: 1, blockButton: true, reachMarker: true, lockOn: true, leftArm: 'grapple', armAim: 'lockon', mech: {}, tuning: {} };
 
 export function loadSettings(): Settings {
   const s: Settings = { ...DEFAULT_SETTINGS };
   try {
     Object.assign(s, JSON.parse(localStorage.getItem(KEY) ?? '{}'));
     s.tuning = { ...(s.tuning ?? {}) };
+    s.mech = { ...(s.mech ?? {}) };
   } catch {
     /* private window or bad JSON: defaults */
   }

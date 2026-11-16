@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Sfx } from './audio/sfx';
-import { DEFAULT_GUARD, PRESETS } from './core/config';
+import { DEFAULT_GUARD, MECH_DEFAULTS, PRESETS } from './core/config';
 import { makePose } from './core/guard';
 import { DEFAULT_LOADOUT, RELICS, WEAPONS, weaponById } from './core/loadout';
 import type { Loadout, Weapon } from './core/loadout';
@@ -9,7 +9,7 @@ import type { Pickup } from './core/roguelite';
 import { Duel, dodgeBeats } from './core/sim';
 import { Footwork } from './core/footwork';
 import { ATTACKS } from './core/enemies';
-import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
+import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, Mechanics, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
 import { CanvasPanel, bar, roundRect } from './render/panels';
 import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
@@ -52,10 +52,12 @@ const TUNE_DEFAULTS: Record<string, number> = {
   healMs: 500,
 };
 /** Which tuning keys are TimingConfig fields (the rest are TUNE_DEFAULTS). */
-const TIMING_TUNE_KEYS = ['blastCooldownMs', 'dashIframesMs', 'iframesMs', 'perfectDodgeMs', 'perfectEarlyMs', 'perfectLateMs', 'hitStopMs', 'grappleCooldownMs', 'healAmount', 'fatalArmMs'];
+const TIMING_TUNE_KEYS = ['feintChance', 'feintMaxMs', 'furyChance', 'riposteMs', 'chargeMs', 'regainMs', 'blastCooldownMs', 'dashIframesMs', 'iframesMs', 'perfectDodgeMs', 'perfectEarlyMs', 'perfectLateMs', 'hitStopMs', 'grappleCooldownMs', 'healAmount', 'fatalArmMs'];
 /** His blade reaches you while you're within this distance of his body (m, after his lunge). */
 const ENEMY_REACH = 1.75;
 const UP = new THREE.Vector3(0, 1, 0);
+/** Fury (parry-only) swings: ember orange, distinct from red must-dodge attacks. */
+const FURY_COLOR = '#ff7a1a';
 /** Your reach to his body axis: arm forward + blade + his body radius (m). */
 const ARM_M = 0.55;
 const BODY_R = 0.27;
@@ -117,6 +119,7 @@ const FAULT_TEXT: Record<Fault, string> = {
   shaky: 'not held',
   locked: 'flailing',
   side: 'wrong side',
+  fury: 'FURY: parry only',
 };
 const hexOf = (k: keyof typeof COLORS) => parseInt(COLORS[k].slice(1), 16);
 
@@ -197,6 +200,13 @@ export class Game {
   private wristAt = 0;
   /** Lock-on reticle on his chest. */
   private readonly lockMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthTest: false, depthWrite: false });
+  private readonly chargeMat = new THREE.MeshBasicMaterial({ color: 0xb5913a, transparent: true, opacity: 0.6, depthTest: false, depthWrite: false });
+  private readonly chargeRing = (() => {
+    const r = new THREE.Mesh(new THREE.RingGeometry(0.075, 0.09, 12, 1), this.chargeMat);
+    r.renderOrder = 18;
+    r.visible = false;
+    return r;
+  })();
   private readonly lockOn = (() => {
     const g = new THREE.Group();
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.07, 32), this.lockMat);
@@ -301,6 +311,7 @@ export class Game {
     if (q.get('enemy') === 'rigged') void this.enemyView.useRigged('./enemy/enemy.json');
     for (const c of this.cards) this.space.group.add(c.mesh);
     this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
+    this.lockOn.add(this.chargeRing);
     scene.add(this.wire, this.lockOn, this.healAura.group, this.aimLine, this.blast.mesh);
     this.space.group.add(this.fatalPrompt.mesh, this.slash);
     this.aimLine.visible = false;
@@ -626,6 +637,8 @@ export class Game {
     }
     if (p.fatalMeter < 100) this.fatalReadyShown = false;
     this.sword.fatal = this.duel.time <= p.fatalArmedUntil;
+    this.sword.riposte = this.duel.mech.riposte && this.duel.time <= p.riposteUntil;
+    this.sword.charged = p.charged;
     // Red attack about to land: a distinct chime 400 ms out (the dodge cue).
     const ra = this.duel.currentAttack;
     const re = this.duel.enemy;
@@ -673,7 +686,7 @@ export class Game {
         this.sword.flash(hexOf(col));
         this.enemyView.react('blocked', this.duel);
         this.record(ev.offsetMs!, 'block', ev.faults ?? []);
-        this.flashResult(`BLOCK · ${faultText(ev.faults)}`, COLORS[col], t);
+        this.flashResult(ev.regain ? `BLOCK · hit back to regain ${Math.round(ev.regain)} HP` : `BLOCK · ${faultText(ev.faults)}`, COLORS[col], t);
         break;
       }
       case 'hit': {
@@ -738,6 +751,19 @@ export class Game {
         break;
       case 'attackStart':
         if (ev.perilous && ev.perilous !== 'none') this.sfx.play('peril');
+        if (ev.fury) {
+          this.sfx.play('peril', 0.7);
+          this.flashResult('FURY · perfect parry only', FURY_COLOR, t);
+        }
+        break;
+      case 'charged':
+        this.sfx.play('chime', 0.35);
+        this.input.pulse('right', 0.35, 60);
+        this.flashResult('CHARGED · swing to crush his posture', '#fff2d0', t);
+        break;
+      case 'regain':
+        this.sfx.play('chime', 0.3);
+        this.flashResult(`+${Math.round(ev.damage ?? 0)} HP regained`, COLORS.open, t);
         break;
       case 'lockout':
         this.flashResult('Flailing: perfect parry locked', COLORS.hit, t);
@@ -756,6 +782,17 @@ export class Game {
           this.flashResult(`FATAL ART · ${Math.round(ev.damage ?? 0)} damage`, COLORS.hit, t);
         }
         if (ev.opening) this.flashResult('OPENING · he covers that side now', COLORS.open, t);
+        if (ev.riposte) {
+          this.sfx.play('clash');
+          this.input.pulse('right', 1, 90);
+          this.sparks.burst(this.enemyView.hitPoint, 0xffd700, 50, 2.8);
+          this.waves.emit(this.enemyView.hitPoint, 0xffd700, 0.7, 380);
+          this.flashResult(`RIPOSTE · ${Math.round(ev.damage ?? 0)} damage`, COLORS.perfect, t);
+        } else if (ev.charged) {
+          this.input.pulse('right', 1, 120);
+          this.waves.emit(this.enemyView.hitPoint, 0xfff2d0, 0.7, 380);
+          this.flashResult(`CHARGED STRIKE · +${this.timing.chargePosture} posture`, '#fff2d0', t);
+        }
         this.sfx.play('strike');
         this.enemyView.hit();
         this.input.pulse('right', 0.6, 30);
@@ -765,7 +802,9 @@ export class Game {
       case 'enemyBlock':
         // Show why the swing did nothing, and where to go instead.
         this.flashResult(
-          ev.poke ? 'DEFLECTED · poke wears his posture' : ev.zone === 'center' ? 'DEFLECTED · hit his open side (green)' : 'DEFLECTED · that side is guarded',
+          ev.charged
+            ? `CHARGED · deflected, but +${this.timing.chargePosture} posture`
+            : ev.poke ? 'DEFLECTED · poke wears his posture' : ev.zone === 'center' ? 'DEFLECTED · hit his open side (green)' : 'DEFLECTED · that side is guarded',
           COLORS.info,
           t,
         );
@@ -887,6 +926,7 @@ export class Game {
       seed: (this.run.seed + this.run.fight * 7919) >>> 0,
       startT: t,
       playerHp: this.run.playerHp,
+      mech: this.mech(),
     });
     this.enemyView.reset();
     this.resetPrev = true;
@@ -1134,7 +1174,17 @@ export class Game {
     const att = d.currentAttack;
     const red = !!att && att.perilous !== 'none' && !d.enemy.struck;
     const gold = d.enemy.state === 'stagger' || d.time <= d.player.counterUntil || d.time <= d.player.fatalArmedUntil;
-    this.lockMat.color.setHex(red ? 0xff3030 : gold ? 0xffd040 : 0xffffff);
+    const fury = !!att && d.enemy.fury && !d.enemy.struck;
+    this.lockMat.color.setHex(red ? 0xff3030 : fury ? 0xff7a1a : gold ? 0xffd040 : 0xffffff);
+    const cp = d.chargeProgress;
+    this.chargeRing.visible = cp > 0.05;
+    if (this.chargeRing.visible) {
+      // A brass gear ring that closes from 0.5 m to the reticle as the charge builds, then locks.
+      this.chargeRing.scale.setScalar(cp >= 1 ? 1 : 3.6 - 2.6 * cp);
+      this.chargeRing.rotation.z = cp >= 1 ? 0 : cp * 4;
+      this.chargeMat.color.setHex(cp >= 1 ? 0xfff2d0 : 0xb5913a);
+      this.chargeMat.opacity = cp >= 1 ? 0.95 : 0.35 + 0.4 * cp;
+    }
     this.lockOn.scale.setScalar(red ? 1 + 0.15 * Math.sin(performance.now() / 60) : 1);
   }
 
@@ -1483,6 +1533,15 @@ export class Game {
           this.drawHelp();
         },
       },
+      {
+        label: 'Mechanics (A/B test)',
+        hint: () => {
+          const m = this.mech();
+          const on = (Object.keys(m) as Array<keyof Mechanics>).filter((k) => m[k]);
+          return `On: ${on.join(', ') || 'none'}`;
+        },
+        act: () => this.pause.openSub('MECHANICS', this.mechanicsRows()),
+      },
       { label: 'Tuning', hint: () => 'Dash, dodge, parry, flask numbers (saved)', act: () => this.pause.openSub('TUNING', this.tuningRows()) },
       {
         label: 'Left arm',
@@ -1589,6 +1648,62 @@ export class Game {
           },
     ];
     return rows.filter((r) => !r.hidden);
+  }
+
+  /** Mechanic toggles in force: defaults overlaid with the player's choices. */
+  private mech(): Mechanics {
+    return { ...MECH_DEFAULTS, ...this.settings.mech };
+  }
+
+  /**
+   * The Mechanics page: switch each experimental mechanic on/off (applies at once, saved), with its
+   * key number beside it, so two versions can be compared in one session.
+   */
+  private mechanicsRows(): MenuItem[] {
+    const s = this.settings;
+    const tm = this.timing as unknown as Record<string, number>;
+    const toggle = (k: keyof Mechanics, label: string, hint: string): MenuItem => ({
+      label,
+      hint: () => hint,
+      value: () => (this.mech()[k] ? 'ON' : 'off'),
+      change: () => {
+        s.mech = { ...s.mech, [k]: !this.mech()[k] };
+        this.duel.mech[k] = this.mech()[k]; // applies to the current fight too
+        saveSettings(s);
+      },
+    });
+    const num = (k: string, label: string, step: number, min: number, max: number, unit: string): MenuItem => ({
+      label: `   ${label}`,
+      value: () => (unit === '%' ? `${Math.round(tm[k] * 100)} %` : `${Math.round(tm[k] * 100) / 100} ${unit}`),
+      change: (d) => {
+        const v = Math.round(Math.min(max, Math.max(min, tm[k] + d * step)) * 1000) / 1000;
+        s.tuning[k] = tm[k] = v;
+        saveSettings(s);
+      },
+    });
+    return [
+      { label: 'Back', act: () => this.pause.back() },
+      toggle('feints', 'Feints (delayed swings)', 'Some windups hold an extra beat: watch the release, not the rhythm'),
+      num('feintChance', 'how often', 0.05, 0, 1, '%'),
+      num('feintMaxMs', 'longest hold', 25, 100, 800, 'ms'),
+      toggle('fury', 'Fury swings (parry only)', 'Ember-orange glow: block and dodge fail, only a PERFECT parry (or distance) works'),
+      num('furyChance', 'how often', 0.05, 0, 1, '%'),
+      toggle('riposte', 'Riposte', 'Strike within the gold glint after a perfect: critical hit'),
+      num('riposteMs', 'window', 25, 100, 1000, 'ms'),
+      toggle('charge', 'Charged strike', 'Hold the sword still (block released) to charge a posture-crushing strike'),
+      num('chargeMs', 'charge time', 100, 300, 3000, 'ms'),
+      toggle('guardRegain', 'Guard Regain', 'Blocks cost HP (ivory on your bar); hit him soon to win it back'),
+      num('regainMs', 'regain time', 250, 500, 6000, 'ms'),
+      toggle('spamLock', 'Spam lockout', 'Flailing the guard locks perfect parries for a moment'),
+      {
+        label: 'All mechanics to defaults',
+        act: () => {
+          s.mech = {};
+          Object.assign(this.duel.mech, MECH_DEFAULTS);
+          saveSettings(s);
+        },
+      },
+    ];
   }
 
   /** The Tuning page: every row steps a number left/right and saves it at once. */
@@ -1897,6 +2012,13 @@ export class Game {
         ctx.fillText(`ASSIST +${d.perfectEarlyMs() - this.timing.perfectEarlyMs - d.mods.perfectWindowBonusMs} ms`, 110, 48);
       }
       pill(ctx, 26, 66, w - 52, 30, p.hp / p.hpMax, '#e04848');
+      if (p.regain > 0) {
+        // Guard Regain: the recoverable chunk, ivory, right after your HP; it drains as time runs out.
+        const left = Math.max(0, Math.min(1, (p.regainUntil - d.time) / this.timing.regainMs));
+        const x0 = 26 + (w - 52) * (p.hp / p.hpMax);
+        ctx.fillStyle = `rgba(255,248,230,${0.35 + 0.5 * left})`;
+        ctx.fillRect(x0, 70, (w - 52) * (p.regain / p.hpMax), 22);
+      }
       pill(ctx, 26, 108, w - 52, 18, pf, pf > 0.75 ? '#ff5a1a' : '#ffb020');
       // Abilities under the bars, so cooldowns are visible without looking at your wrist.
       drawChipRow(ctx, this.abilityChips().slice(0, 4), 18, 150, w - 36, 100);

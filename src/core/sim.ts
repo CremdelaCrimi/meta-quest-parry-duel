@@ -1,6 +1,6 @@
 import { DodgeDetector } from './dodge';
 import type { DodgeHit } from './dodge';
-import { CHAIN_MULT, FRENZY } from './config';
+import { CHAIN_MULT, FRENZY, MECH_DEFAULTS } from './config';
 import { classifyGuard, lerpPose, lerpV3, makePose } from './guard';
 import type { GuardReading } from './guard';
 import { Rng } from './rng';
@@ -16,6 +16,7 @@ import type {
   FrameInput,
   GuardConfig,
   GuardSide,
+  Mechanics,
   Modifiers,
   StrikeZone,
   SwordPose,
@@ -47,6 +48,8 @@ export interface DuelOptions {
   guards?: boolean;
   /** Training: nobody dies; HP refills when it runs out (a practiceReset event). */
   practice?: boolean;
+  /** Toggleable mechanics; missing keys use MECH_DEFAULTS. */
+  mech?: Partial<Mechanics>;
 }
 
 /**
@@ -69,6 +72,14 @@ export class Duel {
     dodgeAt: -Infinity,
     dodgeKind: null as DodgeKind | null,
     lockoutUntil: -Infinity,
+    /** Riposte: a strike up to this time is a critical. */
+    riposteUntil: -Infinity,
+    /** Guard Regain: recoverable HP and when it expires. */
+    regain: 0,
+    regainUntil: -Infinity,
+    /** Charged strike ready, and until when (Infinity while you hold still). */
+    charged: false,
+    chargeKeepUntil: Infinity,
     counterUntil: -Infinity,
     wardCharges: 0,
     slowUntil: -Infinity,
@@ -106,6 +117,10 @@ export class Duel {
     staggerUntil: 0,
     /** Frenzy windup multiplier, fixed when the current attack started so its strike never moves. */
     windupScale: 1,
+    /** Feint: extra hold added to the current windup (ms), fixed when the attack starts. */
+    feintMs: 0,
+    /** Current swing is a Fury (parry-only). */
+    fury: false,
     /** Side he holds his sword on while idle; strikes to the other side get through. */
     guardSide: 'right' as GuardSide,
     /** Enemy-clock time he next moves his idle guard. */
@@ -121,6 +136,12 @@ export class Duel {
   private pending: { att: AttackDef; strikeT: number } | null = null;
   private entries: number[] = [];
   private readonly rng: Rng;
+  /** Separate stream for feints and Fury rolls (drawn every attack, so toggles never shift combos). */
+  private readonly mechRng: Rng;
+  readonly mech: Mechanics;
+  /** Last time the blade tip moved faster than chargeStillSpeed (charged strike). */
+  private lastMoveT = 0;
+  private blockRaw = false;
   /** Separate stream for guard shifts, so they never change which combos the enemy picks. */
   private readonly guardRng: Rng;
   /** Block button at the end of the last frame (true when the game uses no button). */
@@ -154,6 +175,9 @@ export class Duel {
     this.mods = o.mods;
     this.rng = new Rng(o.seed);
     this.guardRng = new Rng(o.seed ^ 0x5bd1e995);
+    this.mechRng = new Rng(o.seed ^ 0x27d4eb2f);
+    this.mech = { ...MECH_DEFAULTS, ...o.mech };
+    this.lastMoveT = o.startT ?? 0;
     this.ai = o.ai ?? true;
     this.guards = o.guards ?? true;
     this.practice = o.practice ?? false;
@@ -179,6 +203,13 @@ export class Duel {
     if (e.state === 'dead') return null;
     if (e.state !== 'idle' || this.time <= this.player.counterUntil || !this.guards || this.time <= e.guardOpenUntil) return 'all';
     return e.guardSide === 'left' ? 'right' : 'left';
+  }
+
+  /** 0..1 how far a charged strike has built up (1 = charged). */
+  get chargeProgress(): number {
+    if (!this.mech.charge) return 0;
+    if (this.player.charged) return 1;
+    return Math.max(0, Math.min(1, (this.time - this.lastMoveT) / this.cfg.chargeMs));
   }
 
   /** Tip speed (m/s) above which the blade counts as moving, for the steadiness check. */
@@ -207,7 +238,9 @@ export class Duel {
 
   /** Scaled windup of an attack in enemy-clock ms (enemy speed and frenzy). */
   windup(att: AttackDef): number {
-    return (att.windupMs / this.enemy.def.speed) * this.enemy.windupScale;
+    const e = this.enemy;
+    const feint = e.combo && e.state === 'attack' && e.combo.steps[e.stepIndex].attack === att ? e.feintMs : 0;
+    return (att.windupMs / e.def.speed) * e.windupScale + feint;
   }
 
   /** Current frenzy level for the enemy's HP, or null when healthy. */
@@ -246,6 +279,7 @@ export class Duel {
     this.events.length = 0;
     this.twoHanded = !!inp.twoHanded; // per frame: a grip change is slower than a frame anyway
     this.heldCurr = inp.blockHeld ?? true;
+    this.blockRaw = inp.blockHeld === true;
     if (this.player.dead || this.enemy.state === 'dead') {
       this.time = inp.t1;
       this.heldPrev = this.heldCurr;
@@ -279,6 +313,7 @@ export class Duel {
       lerpPose(this.poseB, inp.swordPrev, inp.swordCurr, fb);
       const tipSpeed = dist(this.poseA.tip, this.poseB.tip) / Math.max(1e-6, (b - a) / 1000);
       if (tipSpeed > this.steadyLimit) this.lastFastT = b;
+      if (this.mech.charge) this.updateCharge(tipSpeed, b);
       this.classifyAt(this.poseB, fb, this.readB);
       let transT = NaN;
       if (this.readB.dir !== this.guard.dir) {
@@ -361,7 +396,7 @@ export class Duel {
     const ent = this.entries;
     ent.push(t);
     while (ent.length && ent[0] < t - this.cfg.spamWindowMs) ent.shift();
-    if (ent.length > this.cfg.spamMaxEntries && t >= this.player.lockoutUntil) {
+    if (this.mech.spamLock && ent.length > this.cfg.spamMaxEntries && t >= this.player.lockoutUntil) {
       this.player.lockoutUntil = t + this.cfg.spamLockoutMs;
       this.emit({ type: 'lockout', t });
     }
@@ -382,7 +417,8 @@ export class Duel {
       this.emit({ type: 'whiff', t: S, attackId: att.id, dir: att.dir, perilous: att.perilous });
       return;
     }
-    if (S >= p.dodgeAt && S <= p.iframesUntil && dodgeBeats(p.dodgeKind, att)) {
+    // A Fury swing ignores dodge i-frames: only a perfect parry (or distance) answers it.
+    if (!this.enemy.fury && S >= p.dodgeAt && S <= p.iframesUntil && dodgeBeats(p.dodgeKind, att)) {
       // A dodge just before the strike is perfect: he's overextended (counter window, posture,
       // a brief slow). An earlier dodge inside the i-frames is only safe.
       const perfect = S - p.dodgeAt <= this.cfg.perfectDodgeMs;
@@ -432,6 +468,8 @@ export class Duel {
 
     if (faults.length === 0) {
       this.onPerfect(att, t, offset);
+    } else if (this.enemy.fury) {
+      this.takeHit(att, t, offset, [...faults, 'fury']); // a Fury swing can't be blocked
     } else if (offset <= c.blockLateMs && angleErr <= c.blockAngleDeg + (this.twoHanded ? c.twoHandAngleBonusDeg : 0)) {
       this.onBlock(att, t, offset, faults);
     } else {
@@ -446,7 +484,7 @@ export class Duel {
     p.chain++;
     p.hitStreak = 0;
     const chainMult = CHAIN_MULT[Math.min(p.chain, CHAIN_MULT.length) - 1];
-    e.posture += att.postureDamage * c.deflectEnemyPostureMult * this.mods.deflectPostureMult * chainMult;
+    e.posture += att.postureDamage * c.deflectEnemyPostureMult * this.mods.deflectPostureMult * chainMult * (e.fury ? c.furyPostureMult : 1);
     e.postureHitAt = t;
     p.posture = Math.min(c.playerPostureMax - 1, p.posture + c.deflectPlayerPosture);
     p.postureHitAt = t;
@@ -458,6 +496,7 @@ export class Duel {
     p.hitStopFrom = t;
     p.hitStopUntil = t + stop;
     p.counterUntil = t + stop + c.counterWindowMs;
+    if (this.mech.riposte) p.riposteUntil = t + stop + c.riposteMs;
     this.gainFatal(c.fatalPerPerfect);
     this.emit({ type: 'perfect', t, offsetMs: offset, attackId: att.id, dir: att.dir, chain: p.chain });
     if (breaks) this.breakEnemy(t);
@@ -467,14 +506,20 @@ export class Duel {
     const p = this.player;
     const e = this.enemy;
     const c = this.cfg;
-    const dmg = att.damage * c.blockHpMult;
+    const regainOn = this.mech.guardRegain;
+    const dmg = att.damage * (regainOn ? Math.max(c.blockHpMult, c.regainChip) : c.blockHpMult);
     p.chain = 0;
     p.hp -= dmg;
+    if (regainOn && dmg > 0) {
+      // Guard Regain: the chip is held as recoverable HP; hit him soon to win it back.
+      p.regain = Math.min(p.hpMax, (t <= p.regainUntil ? p.regain : 0) + dmg);
+      p.regainUntil = t + c.regainMs;
+    }
     p.posture += att.postureDamage * c.blockPlayerPostureMult * (this.twoHanded ? c.twoHandBlockPostureMult : 1);
     p.postureHitAt = t;
     e.posture += att.postureDamage * c.blockEnemyPostureMult;
     e.postureHitAt = t;
-    this.emit({ type: 'block', t, offsetMs: offset, attackId: att.id, dir: att.dir, damage: dmg, faults });
+    this.emit({ type: 'block', t, offsetMs: offset, attackId: att.id, dir: att.dir, damage: dmg, faults, regain: regainOn ? p.regain : undefined });
     if (p.posture >= c.playerPostureMax) {
       const extra = att.damage * 0.5;
       p.hp -= extra;
@@ -494,6 +539,7 @@ export class Duel {
     p.hp -= att.damage;
     p.chain = 0;
     p.hitStreak++;
+    p.regain = 0; // a clean hit forfeits Guard Regain
     // Say why a dodge didn't save you: it started too early (i-frames ran out) or was the wrong kind.
     const dodged = t - p.dodgeAt < 1000;
     this.emit({
@@ -578,7 +624,7 @@ export class Duel {
     e.posture += c.blastPosture;
     e.postureHitAt = t;
     const att = this.currentAttack;
-    const interrupted = !!att && !e.struck && att.perilous === 'none';
+    const interrupted = !!att && !e.struck && att.perilous === 'none' && !e.fury;
     if (interrupted) {
       this.pending = null;
       this.toIdle(e.clock, 700);
@@ -666,7 +712,15 @@ export class Duel {
     const e = this.enemy;
     const c = this.cfg;
     const p = this.player;
-    const dmg = c.playerDamage * this.mods.playerDamageMult * (this.twoHanded ? c.twoHandDamageMult : 1);
+    const charged = this.mech.charge && p.charged;
+    if (charged) p.charged = false;
+    const dmg = c.playerDamage * this.mods.playerDamageMult * (this.twoHanded ? c.twoHandDamageMult : 1) * (charged ? c.chargeDamageMult : 1);
+    const hpBefore = e.hp;
+    if (charged) {
+      // Charged strike: crushes posture whether it lands or he deflects it.
+      e.posture += c.chargePosture;
+      e.postureHitAt = t;
+    }
 
     if (e.state === 'stagger') {
       e.hp -= c.finisherDamage;
@@ -686,29 +740,37 @@ export class Duel {
       p.hitStopUntil = t + 150;
       this.emit({ type: 'enemyHit', t, damage: d, zone, poke, heavy: true });
     } else if (t <= p.counterUntil) {
-      const d = dmg * 1.5 * this.mods.counterDamageMult;
+      const riposte = t <= p.riposteUntil;
+      const d = dmg * (riposte ? c.riposteDamageMult : 1.5) * this.mods.counterDamageMult;
       e.hp -= d;
-      e.posture += 10;
+      e.posture += riposte ? c.ripostePosture : 10;
       e.postureHitAt = t;
       p.counterUntil = -Infinity;
-      this.emit({ type: 'enemyHit', t, damage: d, zone, poke });
+      p.riposteUntil = -Infinity;
+      this.emit({ type: 'enemyHit', t, damage: d, zone, poke, riposte, charged });
     } else if (e.state === 'attack') {
       e.hp -= dmg;
-      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke });
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, charged });
     } else if (!this.guards || t <= e.guardOpenUntil) {
       e.hp -= dmg; // no guard (training dummy) or torn open by the grapple: everything lands
-      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true, charged });
     } else if (zone !== 'center' && zone !== e.guardSide) {
       // Through his opening. He covers that side at once, so the next one has to go elsewhere.
       e.hp -= dmg;
       this.shiftGuard(zone);
-      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true });
+      this.emit({ type: 'enemyHit', t, damage: dmg, zone, poke, opening: true, charged });
     } else {
       // Deflected. A poke into the guard still leans on his posture.
       e.posture += c.playerPostureDamageOnBlocked * (poke ? (this.twoHanded ? c.twoHandPokeMult : c.pokePostureMult) : 1);
       e.postureHitAt = t;
       this.gainFatal(c.fatalPerDeflect);
-      this.emit({ type: 'enemyBlock', t, zone, poke });
+      this.emit({ type: 'enemyBlock', t, zone, poke, charged });
+    }
+    if (p.regain > 0 && t <= p.regainUntil && e.hp < hpBefore) {
+      const back = Math.min(p.regain, (hpBefore - e.hp) * c.regainPerHit, p.hpMax - p.hp);
+      p.regain -= back;
+      p.hp += back;
+      if (back > 0) this.emit({ type: 'regain', t, damage: back });
     }
     if (!this.checkEnemyDead(t) && e.posture >= e.def.postureMax) this.breakEnemy(t);
   }
@@ -755,7 +817,13 @@ export class Duel {
     e.struck = false;
     e.windupScale = this.frenzy()?.windup ?? 1;
     const att = this.currentAttack!;
-    this.emit({ type: 'attackStart', t, attackId: att.id, dir: att.dir, perilous: att.perilous });
+    // Both rolls are drawn every attack so switching a mechanic never changes what else happens.
+    const rf = this.mechRng.next();
+    const rh = this.mechRng.next();
+    const rd = this.mechRng.range(this.cfg.feintMinMs, this.cfg.feintMaxMs);
+    e.feintMs = this.mech.feints && rf < this.cfg.feintChance ? rd : 0;
+    e.fury = this.mech.fury && att.perilous === 'none' && rh < this.cfg.furyChance;
+    this.emit({ type: 'attackStart', t, attackId: att.id, dir: att.dir, perilous: att.perilous, fury: e.fury, feintMs: e.feintMs });
   }
 
   private toIdle(eFrom: number, delay: number): void {
@@ -806,10 +874,26 @@ export class Duel {
     }
   }
 
+  /** Charged strike: hold the blade still with the block released; the charge survives the swing's start. */
+  private updateCharge(tipSpeed: number, t: number): void {
+    const p = this.player;
+    const c = this.cfg;
+    if (tipSpeed > c.chargeStillSpeed || this.blockRaw) {
+      if (p.charged && p.chargeKeepUntil === Infinity) p.chargeKeepUntil = t + c.chargeKeepMs;
+      this.lastMoveT = t;
+    } else if (!p.charged && t - this.lastMoveT >= c.chargeMs) {
+      p.charged = true;
+      p.chargeKeepUntil = Infinity;
+      this.emit({ type: 'charged', t });
+    }
+    if (p.charged && t > p.chargeKeepUntil) p.charged = false;
+  }
+
   private regen(spanMs: number, t: number): void {
     const c = this.cfg;
     const dt = spanMs / 1000;
     const p = this.player;
+    if (t > p.regainUntil) p.regain = 0;
     if (t - p.postureHitAt > c.postureRegenDelayMs) {
       p.posture = Math.max(0, p.posture - c.postureRegenPerSec * dt);
     }

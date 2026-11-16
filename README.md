@@ -107,6 +107,21 @@ with a short freeze. When he's broken the prompt reads **X · FINISH HIM**. When
   open (counter, broken, Fatal Art armed). Menu → Lock-on marker turns it off.
 - Above him: his HP, posture, chain and frenzy. Floor arc: your reach (green = in range).
 
+## Mechanics (menu → Mechanics, A/B test)
+Experimental mechanics you can switch on and off mid-fight (saved), each with its key number:
+
+| Mechanic | Default | What it does |
+|---|---|---|
+| Feints | ON | 35% of windups hold an extra 150-400 ms before the swing (same pose, later release). Gears stall, a puff at his shoulder. |
+| Fury swings | off | 25% of normal swings glow ember-orange: block and dodge fail, only a **perfect parry** (or being out of reach) works. A perfect on one does ×1.5 posture. Blast can't interrupt it. |
+| Riposte | ON | Strike within 400 ms of a perfect parry's freeze (your blade glints gold): ×2.2 damage, +25 posture. |
+| Charged strike | off | Hold the sword still (tip under 0.35 m/s) with block released for 1.2 s: a brass ring closes on his chest, your blade turns white-hot. The next swing within 0.9 s does ×1.6 damage and +30 posture even if he deflects it. |
+| Guard Regain | off | Blocks cost 50% of the swing as HP, shown ivory on your HP bar; hit him within 2.5 s to win it back. A clean hit on you forfeits it. |
+| Spam lockout | ON | More than 3 guard entries in 700 ms locks perfect parries for 350 ms. |
+
+Picked with Gemini (2026-11-16, `docs/design/2026-11-16-gemini-research.md`) from Lies of P's
+delayed attacks, Fury attacks, charged attacks and Guard Regain and Sekiro's deflect rhythm.
+
 ## Tuning (menu → Tuning)
 Every row steps a number and saves it at once (`parryDuel.settings`): dash i-frames (= dash time),
 distance, cooldown, perfect dodge window, lean/duck i-frames, perfect parry early/late, parry freeze,
@@ -261,7 +276,14 @@ Enemies attack in 1-, 2- and 3-hit strings with a fixed rhythm per enemy (`src/c
 pips above the head show the string length. Each swing leaves a fading trail so you can learn its path.
 
 ## Enemy model
-The default enemy is the simple built-in swordsman (`src/render/views.ts`): each swing is a
+The default enemy is **the Brass Marquis** (`src/render/marquis.ts`), an original clockwork duelist
+built from ~40 primitives: porcelain mask with a brass slit and glowing optic, teal tailcoat lined in
+crimson, exposed waist cogs, brass shoulder joints, tricorn with a plume, brass boots, a wind-up key
+on his back and a cup-hilted blade. Concept: `docs/design/img/brass-marquis-turnaround-gemini.png`.
+His parts carry the tells: shoulder gears and the key spin through a windup and **stall during a
+feint**, with a puff at the sword shoulder; his **core, optic and blade glow ember-orange** for a Fury
+swing (blazing for its last 400 ms). Each swing is a
+windup pose, a middle control point and a strike pose, swept along a curve so impact lands on the
 windup pose, a middle control point and a strike pose, swept along a curve so impact lands on the
 sim's strike instant. `?enemy=rigged` loads the experimental model instead:
 `public/enemy/` holds a Tripo-generated, Mixamo-rigged swordsman (`swordsman.glb`, ~2 MB, 10 clips)

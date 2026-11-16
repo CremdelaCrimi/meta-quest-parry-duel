@@ -136,6 +136,29 @@ export interface TimingConfig {
   fatalArmMs: number;
   fatalDamageMult: number;
   fatalPosture: number;
+  /** Toggleable mechanics (menu → Mechanics). Feints: chance a windup holds an extra random beat. */
+  feintChance: number;
+  feintMinMs: number;
+  feintMaxMs: number;
+  /** Fury: chance a normal swing is parry-only (blocks and dodges fail; distance still works). */
+  furyChance: number;
+  furyPostureMult: number;
+  /** Riposte: a strike this soon after a perfect parry's freeze is a critical. */
+  riposteMs: number;
+  riposteDamageMult: number;
+  ripostePosture: number;
+  /** Charged strike: hold the blade still (tip under chargeStillSpeed) for chargeMs, block released;
+   *  the charge lasts chargeKeepMs once you start the swing. */
+  chargeMs: number;
+  chargeStillSpeed: number;
+  chargeKeepMs: number;
+  chargeDamageMult: number;
+  chargePosture: number;
+  /** Guard Regain: a block costs this fraction of the swing as HP, all recoverable by hitting him
+   *  within regainMs (each landed hit wins back regainPerHit × its damage). */
+  regainChip: number;
+  regainMs: number;
+  regainPerHit: number;
   /** A dodge started within this long before the strike is a perfect dodge (counter + posture). */
   perfectDodgeMs: number;
   /** Posture a perfect dodge deals to him (half against a normal swing). */
@@ -261,14 +284,34 @@ export type DuelEventType =
   | 'grapple'
   | 'heal'
   | 'fatalArmed'
-  | 'blast';
+  | 'blast'
+  /** Charged strike ready (blade held still long enough). */
+  | 'charged'
+  /** Guard Regain won back HP. */
+  | 'regain';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
  * early/late: outside the timing window · angle: blade not square to the attack ·
  * shaky: blade still moving (swung into the guard) · locked: anti-spam lockout · side: wrong guard.
  */
-export type Fault = 'early' | 'late' | 'angle' | 'shaky' | 'locked' | 'side';
+export type Fault = 'early' | 'late' | 'angle' | 'shaky' | 'locked' | 'side' | 'fury';
+
+/** Mechanics the designer can switch on and off to A/B test them (menu → Mechanics). */
+export interface Mechanics {
+  /** Some windups hold an extra random beat before the swing (same pose, later release). */
+  feints: boolean;
+  /** Some normal swings glow ember-orange: only a perfect parry (or distance) stops them. */
+  fury: boolean;
+  /** A strike right after a perfect parry is a critical. */
+  riposte: boolean;
+  /** Too many guard entries lock out perfects for a moment. */
+  spamLock: boolean;
+  /** Hold the blade still to charge a heavy, posture-crushing strike. */
+  charge: boolean;
+  /** Blocks cost HP you can win back by hitting him soon after. */
+  guardRegain: boolean;
+}
 
 export interface DuelEvent {
   type: DuelEventType;
@@ -301,6 +344,14 @@ export interface DuelEvent {
   heavy?: boolean;
   /** On blast: it cut his swing short. */
   interrupted?: boolean;
+  /** On attackStart: a Fury (parry-only) swing, and how long a feint holds the windup. */
+  fury?: boolean;
+  feintMs?: number;
+  /** On enemyHit: a riposte (strike right after a perfect) / a charged strike. */
+  riposte?: boolean;
+  charged?: boolean;
+  /** On block: HP now recoverable (Guard Regain). On regain: HP won back. */
+  regain?: number;
   /** On grapple: what it did. */
   grapple?: 'guardBreak' | 'pull' | 'backfire' | 'miss';
 }
