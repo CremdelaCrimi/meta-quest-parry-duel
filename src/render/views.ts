@@ -337,12 +337,19 @@ export class EnemyView {
     this.parts = buildMarquis(this.body, m);
     this.root.add(this.parts.cup, this.shadow);
 
-    const armGeo = new THREE.CylinderGeometry(0.045, 0.04, 1, 8);
-    armGeo.translate(0, 0.5, 0);
+    // Two-bone arms (upper arm + forearm, brass elbow and hand), solved by IK to the hilt each frame.
+    const upperGeo = new THREE.CylinderGeometry(0.05, 0.042, 1, 8);
+    upperGeo.translate(0, 0.5, 0);
+    const foreGeo = new THREE.CylinderGeometry(0.042, 0.035, 1, 8);
+    foreGeo.translate(0, 0.5, 0);
+    const brass = new THREE.MeshStandardMaterial({ color: MARQUIS.brass, roughness: 0.35, metalness: 0.8 });
     for (let i = 0; i < 2; i++) {
-      const arm = new THREE.Mesh(armGeo, m);
-      this.root.add(arm);
-      this.arms.push(arm);
+      const arm = new THREE.Mesh(upperGeo, m);
+      const fore = new THREE.Mesh(foreGeo, m);
+      const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), brass);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.04, 10, 8), brass);
+      this.root.add(arm, fore, elbow, hand);
+      this.arms.push(arm, fore, elbow, hand);
     }
     const bladeGeo = new THREE.BoxGeometry(0.022, 1, 0.055);
     bladeGeo.translate(0, 0.5, 0);
@@ -622,6 +629,36 @@ export class EnemyView {
     }
   }
 
+  private readonly elbowV = new THREE.Vector3();
+  private readonly poleV = new THREE.Vector3();
+  private readonly dirV = new THREE.Vector3();
+
+  /**
+   * Analytic two-bone IK: shoulder → elbow → hand on the hilt. The elbow bends out to his side, down
+   * and back (the pole), like a fencer's arm, so a raised guard reads as a raised arm, not a stick.
+   */
+  private placeArm(i: number, sh: THREE.Vector3, hand: THREE.Vector3, sideX: number): void {
+    const [upper, fore, elbowM, handM] = this.arms.slice(i * 4, i * 4 + 4);
+    const L1 = 0.31;
+    const L2 = 0.3;
+    const dir = this.dirV.subVectors(hand, sh);
+    const d = Math.min(L1 + L2 - 0.002, Math.max(0.05, dir.length()));
+    dir.normalize();
+    const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    // Pole: outward on his side (local x is mirrored from duel x), down, and back away from you (+z).
+    const pole = this.poleV.set(-Math.sign(sideX) * 0.7, -0.6, 0.35);
+    pole.addScaledVector(dir, -pole.dot(dir));
+    if (pole.lengthSq() < 1e-6) pole.set(0, -1, 0);
+    pole.normalize();
+    const elbow = this.elbowV.copy(sh).addScaledVector(dir, a).addScaledVector(pole, h);
+    placeSegment(upper, sh, elbow, this.v3);
+    // The forearm reaches the hand even when the hilt is out of reach (it just stretches a little).
+    placeSegment(fore, elbow, hand, this.v3);
+    elbowM.position.copy(elbow);
+    handM.position.copy(hand);
+  }
+
   /** Current step-in toward the player (m), eased so combos never snap. */
   lunge = 0;
   private readonly trail = new SwingTrail();
@@ -842,7 +879,7 @@ export class EnemyView {
       const x0 = i === 0 ? -MARQUIS.shoulderX : MARQUIS.shoulderX;
       const tw = this.body.rotation.y;
       const sh = DuelSpace.toLocal({ x: fx + x0 * Math.cos(tw), y: shoulderY, z: Dz - 0.02 + x0 * Math.sin(tw) }, this.v2);
-      placeSegment(this.arms[i], sh, hilt, this.v3);
+      this.placeArm(i, sh, hilt, x0);
     }
 
     // Telegraph glow: ramps up through the windup, red for perilous attacks.
