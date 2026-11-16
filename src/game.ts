@@ -321,6 +321,8 @@ export class Game {
     for (const c of this.cards) this.space.group.add(c.mesh);
     this.space.group.add(this.timeline.mesh, this.coach.mesh, this.reachArc);
     this.lockOn.add(this.chargeRing);
+    // A feint's hold starts: a tiny clockwork tick from his sword shoulder.
+    this.enemyView.onFeint = (at) => this.sfx.play('tick', 0.9, { at });
     scene.add(this.floats.group);
     scene.add(this.wire, this.lockOn, this.healAura.group, this.aimLine, this.blast.mesh);
     this.space.group.add(this.fatalPrompt.mesh, this.slash);
@@ -443,6 +445,9 @@ export class Game {
     this.enemyView.update(this.duel, this.space, dt, this.headCurr);
     this.updateLockOn(f.headPos);
     this.healAura.update(dt);
+    // Ears follow the head, so his tells come from where he stands.
+    this.tmp4.set(0, 0, -1).applyQuaternion(f.headQuat);
+    this.sfx.setListener(f.headPos, this.tmp4, this.tmp5.set(0, 1, 0).applyQuaternion(f.headQuat));
     this.floats.update(dt, f.headPos);
     this.updateAimLine(f);
     this.updateFatalPrompt(t);
@@ -663,7 +668,7 @@ export class Game {
       const due = MAINSPRING_CLANKS_MS.filter((ms) => toHit <= ms).length;
       while (this.clanks < due) {
         this.clanks++;
-        this.sfx.play('clank');
+        this.sfx.play('clank', 1, { at: this.enemyView.chestWorld(this.space, this.tmp3) });
         this.input.pulse('left', 0.35, 30);
       }
     }
@@ -691,9 +696,10 @@ export class Game {
     switch (ev.type) {
       case 'perfect': {
         const n = ev.chain ?? 1;
-        this.sfx.play('perfect');
-        this.input.pulse('right', 1, this.timing.hitStopMs); // rumble and freeze end together
-        this.input.pulse('left', 0.6, this.timing.hitStopMs);
+        // Each chained perfect rings +1.5 semitones higher (capped), from the clash point.
+        this.sfx.play('perfect', 1, { rate: Math.pow(2, (1.5 * Math.min(n - 1, 6)) / 12), at: contact });
+        this.rumbleDecay('right', 1, Math.max(140, this.timing.hitStopMs)); // struck steel dying away
+        this.rumbleDecay('left', 0.6, Math.max(140, this.timing.hitStopMs));
         this.sparks.burst(contact, 0xffd060, 70, 3.2);
         this.sparks.burst(contact, 0xff5030, 25, 2.2); // a red edge to the burst
         this.waves.emit(contact, 0xffd060, 0.45 + 0.1 * Math.min(4, n), 420);
@@ -780,7 +786,7 @@ export class Game {
       case 'attackStart':
         if (ev.perilous && ev.perilous !== 'none') this.sfx.play('peril');
         if (ev.fury) {
-          this.sfx.play('peril', 0.7);
+          this.sfx.play('ignite', 0.9, { at: this.enemyView.chestWorld(this.space, this.tmp3) });
           this.flashResult('FURY · perfect parry only', FURY_COLOR, t);
         }
         break;
@@ -790,7 +796,7 @@ export class Game {
         this.flashResult('CHARGED · swing to crush his posture', '#fff2d0', t);
         break;
       case 'phase2':
-        this.sfx.play('spring');
+        this.sfx.play('spring', 1, { at: this.enemyView.chestWorld(this.space, this.tmp3) });
         this.input.pulse('right', 0.8, 200);
         this.input.pulse('left', 0.8, 200);
         this.waves.emit(this.enemyView.chestWorld(this.space, this.tmp3), FURY_HEX, 1.2, 700);
@@ -833,8 +839,8 @@ export class Game {
           this.flashResult(`CHARGED STRIKE · +${this.timing.chargePosture} posture`, '#fff2d0', t);
           this.floats.pop(this.enemyView.hitPoint, 'CRUSH', '#fff2d0');
         }
-        this.sfx.play('strike');
-        this.enemyView.hit();
+        this.sfx.play('strike', 1, { at: this.enemyView.hitPoint });
+        this.enemyView.hit(ev.zone ?? 'center');
         this.input.pulse('right', 0.6, 30);
         this.sparks.burst(this.enemyView.hitPoint, 0xff6040, 14, 1.5);
         this.waves.emit(this.enemyView.hitPoint, ev.opening ? 0x60ff9a : 0xff6040, 0.25, 220);
@@ -1288,6 +1294,7 @@ export class Game {
   }
   private readonly tmp3 = new THREE.Vector3();
   private readonly tmp4 = new THREE.Vector3();
+  private readonly tmp5 = new THREE.Vector3();
   private trailWhiffT = 0;
 
   // ---------------------------------------------------------------- training
@@ -1730,6 +1737,15 @@ export class Game {
         act: () => this.playtest.reset(),
       },
     ];
+  }
+
+  /** A rumble that decays like struck steel (peak at once, fading to zero over `ms`), as steps. */
+  private rumbleDecay(hand: 'left' | 'right', amp: number, ms: number): void {
+    const steps = 6;
+    for (let i = 0; i < steps; i++) {
+      const k = i / steps;
+      setTimeout(() => this.input.pulse(hand, amp * Math.exp(-4 * k), ms / steps + 8), (ms * i) / steps);
+    }
   }
 
   /** Mechanic toggles in force: defaults overlaid with the player's choices. */

@@ -1,7 +1,7 @@
 // Procedurally synthesised sound effects, pre-rendered into AudioBuffers once
 // so playback is a single buffer-source start (lowest latency WebAudio offers).
 
-export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui' | 'whoosh' | 'chime' | 'clash' | 'grapple' | 'clank' | 'spring';
+export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui' | 'whoosh' | 'chime' | 'clash' | 'grapple' | 'clank' | 'spring' | 'tick' | 'ignite';
 
 export class Sfx {
   private ctx: AudioContext | null = null;
@@ -64,24 +64,64 @@ export class Sfx {
     make('clank', 0.22, (t) => Math.exp(-t * 28) * (sin(310, t) + 0.8 * sin(745, t) + 0.4 * sin(1630, t)) + noise() * Math.exp(-t * 90) * 0.9);
     // Phase 2: a spring snapping loose, a falling twang with a rattle.
     make('spring', 1.0, (t) => Math.exp(-t * 3.5) * sin(520 * (1 - 0.45 * t), t) * (0.6 + 0.4 * sin(31, t)) + noise() * Math.exp(-t * 25) * 0.7);
+    // Feint stall: a tiny, sharp clockwork tick (3.5-6 kHz, 50 ms) from his shoulder.
+    make('tick', 0.06, (t) => Math.exp(-t * 120) * (sin(4200, t) + 0.6 * sin(5900, t)) + noise() * Math.exp(-t * 300) * 0.5);
+    // Fury ignition: a rising sizzle from his core (200 Hz → 1 kHz over 400 ms) with crackle.
+    let ph = 0;
+    make('ignite', 0.45, (t) => {
+      ph += (2 * Math.PI * (200 + 1800 * t)) / sr;
+      const env = Math.min(1, t * 12) * Math.exp(-t * 3);
+      return env * (0.7 * Math.sin(ph) + 0.35 * Math.sin(2 * ph)) + noise() * env * (Math.random() < 0.08 ? 1.2 : 0.15);
+    });
     // Grapple wire: a fast descending zip.
     make('grapple', 0.25, (t) => Math.exp(-t * 10) * sin(1800 * (1 - t * 2.5), t) * 0.8 + noise() * Math.exp(-t * 30) * 0.4);
   }
 
-  play(name: SfxName, gain = 1): void {
+  /**
+   * Play a sound. `rate` shifts pitch (1.09 ≈ +1.5 semitones); `at` places it in the world (an HRTF
+   * panner) so his tells come from his body while your own hits stay in your head (Gemini audio spec).
+   */
+  play(name: SfxName, gain = 1, opts: { rate?: number; at?: { x: number; y: number; z: number } } = {}): void {
     const ctx = this.ctx;
     const buf = this.buffers.get(name);
     if (!ctx || !buf) return;
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    if (gain === 1) {
-      src.connect(ctx.destination);
-    } else {
+    if (opts.rate) src.playbackRate.value = opts.rate;
+    let node: AudioNode = src;
+    if (gain !== 1) {
       const g = ctx.createGain();
       g.gain.value = gain;
-      src.connect(g).connect(ctx.destination);
+      node = node.connect(g);
     }
+    if (opts.at) {
+      const p = ctx.createPanner();
+      p.panningModel = 'HRTF';
+      p.distanceModel = 'inverse';
+      p.refDistance = 1.5;
+      p.rolloffFactor = 0.6;
+      p.positionX.value = opts.at.x;
+      p.positionY.value = opts.at.y;
+      p.positionZ.value = opts.at.z;
+      node = node.connect(p);
+    }
+    node.connect(ctx.destination);
     src.start();
+  }
+
+  /** Where your ears are (call every frame with the head pose). */
+  setListener(pos: { x: number; y: number; z: number }, fwd: { x: number; y: number; z: number }, up: { x: number; y: number; z: number }): void {
+    const l = this.ctx?.listener;
+    if (!l || !l.positionX) return;
+    l.positionX.value = pos.x;
+    l.positionY.value = pos.y;
+    l.positionZ.value = pos.z;
+    l.forwardX.value = fwd.x;
+    l.forwardY.value = fwd.y;
+    l.forwardZ.value = fwd.z;
+    l.upX.value = up.x;
+    l.upY.value = up.y;
+    l.upZ.value = up.z;
   }
 
   /** Reported output latency, for the debug panel (ms). */

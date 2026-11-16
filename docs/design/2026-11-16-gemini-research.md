@@ -138,3 +138,18 @@ Reset **menu → Playtest stats** before each session; set toggles in **menu →
   "Mainspring" (3 clanks at 900/600/300 ms before a Fury overhead; parry on the fourth beat).
   Gemini proposed a 3 m instant lunge; we kept his normal 0.5 m step-in, because a 3 m teleport
   reads as a glitch in VR and the rhythm is the real counter anyway.
+
+## 8. Game-feel sprint (Gemini's ranking) and audio spec
+
+| Proposal | Status |
+|---|---|
+| Procedural hit displacement: jolt the body 20° away from the blow in 50 ms, ease back over 300 ms | **built** (`EnemyView.hit(zone)`: side hits roll him, centre hits rock him back) |
+| Haptic envelope: perfect parry peaks at 1.0 and decays to 0 over ~140 ms instead of a flat buzz | **built** (`rumbleDecay`, 6 steps, exponential) |
+| Chain pitch escalation: +1.5 semitones per chained perfect, reset on a miss | **built** (capped at 6 steps) |
+| Spark freeze for the first 40 ms of the hit-stop, then burst at 15 m/s | later |
+| Enemy blade trail only on active frames, 150 ms life | already close (trail follows the swing; tune `TRAIL_MS`) |
+
+Audio spec highlights now in: tells spatialised at his body with an HRTF panner (clank, spring,
+Fury ignition, feint tick, his strikes, the perfect at the clash point), your own hits stay in your
+head. New sounds: **feint tick** (4-6 kHz, 50 ms, from the sword shoulder when a hold starts) and
+**Fury ignition** (rising 200 Hz → 1 kHz sizzle, 400 ms, from his core).

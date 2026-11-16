@@ -479,9 +479,18 @@ export class EnemyView {
     this.root.visible = true;
   }
 
-  hit(): void {
+  /** He was struck: flash, and jolt the body away from the blow (20° in 50 ms, back over 300 ms). */
+  hit(zone: 'left' | 'right' | 'center' = 'center'): void {
     this.hitFlash = 1;
+    this.recoilT = 0;
+    // Duel-frame side → his body's local roll (local x is mirrored), centre hits rock him back.
+    this.recoilSide = zone === 'left' ? 1 : zone === 'right' ? -1 : 0;
   }
+
+  /** Called when a feint's hold starts (world position of the sword shoulder), e.g. for a tick sound. */
+  onFeint: ((at: THREE.Vector3) => void) | null = null;
+  private recoilT = -1;
+  private recoilSide = 0;
 
   private reaction: EnemyReaction | null = null;
   private reactT = 0;
@@ -578,6 +587,10 @@ export class EnemyView {
         this.puffT = 0;
         const side = Math.sign(KEYS[kindOf(att!)].windup.tip.x) || 1;
         P.puff.position.set(-side * MARQUIS.shoulderX, MARQUIS.shoulderY + 0.05, 0);
+        if (this.onFeint) {
+          this.body.updateMatrixWorld();
+          this.onFeint(P.puff.getWorldPosition(this.v1.clone()));
+        }
       }
     }
     const p2 = e.phase2;
@@ -856,6 +869,15 @@ export class EnemyView {
     if (e.state !== 'dead' && e.state !== 'stagger') {
       this.body.rotation.y = this.twist;
       this.body.rotation.x = this.lean;
+      this.body.rotation.z = 0;
+    }
+    if (this.recoilT >= 0) {
+      this.recoilT += dtMs;
+      const k = this.recoilT < 50 ? this.recoilT / 50 : Math.max(0, 1 - (this.recoilT - 50) / 300);
+      const ang = 0.35 * (k < 1 && this.recoilT >= 50 ? k * k * (3 - 2 * k) : k); // 20°, eased back
+      if (this.recoilSide === 0) this.body.rotation.x -= ang * 0.6;
+      else this.body.rotation.z += this.recoilSide * ang;
+      if (this.recoilT > 350) this.recoilT = -1;
     }
 
     // Blade and arms. Blade poses are authored for the canonical spot, so they follow his footwork,
