@@ -700,7 +700,8 @@ export class Game {
         this.sfx.play('perfect', 1, { rate: Math.pow(2, (1.5 * Math.min(n - 1, 6)) / 12), at: contact });
         this.rumbleDecay('right', 1, Math.max(140, this.timing.hitStopMs)); // struck steel dying away
         this.rumbleDecay('left', 0.6, Math.max(140, this.timing.hitStopMs));
-        this.sparks.burst(contact, 0xffd060, 70, 3.2);
+        // Spark freeze: the gold burst hangs at the clash for 40 ms, then explodes outward.
+        this.sparks.burst(contact, 0xffd060, 70, 4.5, 40);
         this.sparks.burst(contact, 0xff5030, 25, 2.2); // a red edge to the burst
         this.waves.emit(contact, 0xffd060, 0.45 + 0.1 * Math.min(4, n), 420);
         this.waves.emit(contact, 0xffffff, 0.25, 260);

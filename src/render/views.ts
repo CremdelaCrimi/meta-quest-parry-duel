@@ -1082,6 +1082,8 @@ export class Sparks {
   private readonly vel = new Float32Array(SPARKS * 3);
   private readonly life = new Float32Array(SPARKS);
   private readonly base = new Float32Array(SPARKS * 3);
+  /** Per spark: ms it hangs at the burst point before flying (the perfect-parry "spark freeze"). */
+  private readonly hold = new Float32Array(SPARKS);
   private next = 0;
   private readonly c = new THREE.Color();
 
@@ -1098,7 +1100,8 @@ export class Sparks {
     this.points.frustumCulled = false;
   }
 
-  burst(at: THREE.Vector3, color: number, n: number, speed: number): void {
+  /** `holdMs`: sparks hang, bright, at the point for this long, then burst (kinetic build-up). */
+  burst(at: THREE.Vector3, color: number, n: number, speed: number, holdMs = 0): void {
     this.c.setHex(color);
     for (let i = 0; i < n; i++) {
       const k = this.next;
@@ -1113,6 +1116,7 @@ export class Sparks {
       this.vel[k * 3 + 1] = u * speed + speed * 0.3;
       this.vel[k * 3 + 2] = Math.sin(th) * s;
       this.life[k] = 1;
+      this.hold[k] = holdMs;
       this.base[k * 3] = this.c.r;
       this.base[k * 3 + 1] = this.c.g;
       this.base[k * 3 + 2] = this.c.b;
@@ -1125,6 +1129,13 @@ export class Sparks {
       const l = this.life[k];
       if (l <= 0) {
         this.col[k * 3] = this.col[k * 3 + 1] = this.col[k * 3 + 2] = 0;
+        continue;
+      }
+      if (this.hold[k] > 0) {
+        this.hold[k] -= dtMs;
+        this.col[k * 3] = this.base[k * 3];
+        this.col[k * 3 + 1] = this.base[k * 3 + 1];
+        this.col[k * 3 + 2] = this.base[k * 3 + 2];
         continue;
       }
       this.life[k] = l - dt * 2.5;
