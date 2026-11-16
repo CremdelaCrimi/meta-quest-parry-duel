@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Duel } from '../core/sim';
 import type { AttackDef, SwordPose, V3 } from '../core/types';
 import { ATTACK_LUNGE, DuelSpace, ENEMY_DIST } from './duelSpace';
-import { MARQUIS, buildMarquis } from './marquis';
+import { MARQUIS, blobShadow, buildMarquis } from './marquis';
 import type { MarquisParts } from './marquis';
 import { RiggedEnemy } from './riggedEnemy';
 
@@ -317,6 +317,8 @@ export class EnemyView {
   private hitFlash = 0;
   private deadT = 0;
   private readonly parts: MarquisParts;
+  /** Blob shadow on the floor under him: grounds him so his distance reads in VR. */
+  private readonly shadow = blobShadow();
   /** Shoulder-gear spin (rad) and the attack whose feint puff already played. */
   private gearSpin = 0;
   private puffT = -1;
@@ -331,7 +333,7 @@ export class EnemyView {
     const m = this.bodyMat;
     // Body is built floor-relative (y=0 at the floor) at the enemy's position: The Brass Marquis.
     this.parts = buildMarquis(this.body, m);
-    this.root.add(this.parts.cup);
+    this.root.add(this.parts.cup, this.shadow);
 
     const armGeo = new THREE.CylinderGeometry(0.045, 0.04, 1, 8);
     armGeo.translate(0, 0.5, 0);
@@ -424,7 +426,7 @@ export class EnemyView {
     const a = att!;
     const p = Math.min(1, Math.max(0, duel.attackProgress()));
     this.pathMesh.geometry = this.pathGeo(kindOf(a));
-    this.pathMat.color.setHex(a.perilous !== 'none' ? 0xff3030 : 0xbfe0ff);
+    this.pathMat.color.setHex(a.perilous !== 'none' ? 0xff3030 : duel.enemy.fury ? 0xff7a1a : 0xbfe0ff);
     this.pathMat.opacity = 0.05 + 0.2 * p * p;
     if (!block) return;
 
@@ -583,8 +585,9 @@ export class EnemyView {
       this.puffT += dtMs;
       const k = this.puffT / 320;
       P.puff.visible = k < 1;
-      P.puff.scale.setScalar(0.5 + 1.5 * k);
-      P.puffMat.opacity = 0.55 * (1 - k);
+      // Bright, opaque and fast, so a feint reads in peripheral vision (you're watching his blade).
+      P.puff.scale.setScalar(0.6 + 2.6 * Math.sqrt(k));
+      P.puffMat.opacity = 0.9 * (1 - k);
       if (k >= 1) this.puffT = -1;
     }
     // Fury: ember core, optic and blade. Dim through the windup, blazing for the last 400 ms.
@@ -736,6 +739,8 @@ export class EnemyView {
     const Dz = D + this.footZ - this.lunge;
     const fx = this.footX;
     DuelSpace.toLocal({ x: fx, y: -space.height, z: Dz }, this.body.position);
+    this.shadow.position.copy(this.body.position).setY(this.body.position.y + 0.006);
+    this.shadow.visible = e.state !== 'dead';
 
     if (e.state === 'dead') {
       this.deadT += dtMs;

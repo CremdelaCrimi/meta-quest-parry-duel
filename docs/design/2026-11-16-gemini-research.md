@@ -96,3 +96,26 @@ The concept turnaround (`img/brass-marquis-turnaround-gemini.png`) added a brass
 a crimson sash with a gear belt, brass knee joints and boots, and a wind-up key on his back. All of
 these are in `src/render/marquis.ts`. In-game: `img/marquis-ingame-v2.jpg`,
 `img/marquis-fury-ingame-v1.jpg` (Fury windup).
+
+## 5. Critique of the build (Gemini saw two in-game captures)
+
+| Point | Our call |
+|---|---|
+| Red (must-dodge) and orange (Fury) are too close for split-second reads; use one danger colour and let text say the answer | **Open: your call.** One colour loses the dodge-vs-parry read before the text is read. Playtest stats now count "tried to dodge" on Fury swings, which is the signal for this exact confusion. |
+| On a Fury swing the guides must take the warning colour, not cyan | **built** (ghost, ring and swing path all ember-orange until the perfect window turns them gold) |
+| No shadows = he floats, distance is hard to judge | **built**: blob shadow under his feet |
+| Dark teal coat melts into the hall; add a cheap Fresnel rim | **built**: ivory rim baked into his materials (`addRim` in `marquis.ts`) |
+| Training panels: training only | already the case |
+| Green open-side ring clashes with the palette; use pulsing ivory | not taken yet: green is the "go" colour across the whole HUD; revisit with the colour pass above |
+| Feint puff too subtle at 1.85 m | **built**: brighter, opaque, faster burst |
+| Wrist watch at least 0.08 m radius | wrist panel enlarged 0.11 → 0.13 m |
+
+## 6. VR playtest protocol (Gemini, adapted to our menus)
+
+Reset **menu → Playtest stats** before each session; set toggles in **menu → Mechanics**.
+
+| Session (10 min) | Mechanics ON | Watch | Fail if |
+|---|---|---|---|
+| 1. Baseline rhythm | Spam lockout only (feints, Fury, riposte, charge, regain off) | Perfect rate (all guards) 40-60 %; spam lockouts spike then drop under 2/min | perfect rate < 20 % → the 30° angle check is too strict |
+| 2. Cognitive load | Spam lockout, Feints, Fury | Feints: guarded too early (should fall); Fury perfect rate and "tried to dodge" | > 75 % of Fury swings hit you → the 400 ms glow is too short for VR |
+| 3. Aggressive flow | Everything (plus Charge if you want) | Guard Regain won back; riposte use per perfect | regain < 30 % → spacing or his recovery is too short to punish |

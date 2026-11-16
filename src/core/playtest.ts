@@ -26,6 +26,9 @@ export class PlaytestLog {
     fury: 0,
     furyPerfect: 0,
     perfects: 0,
+    blocks: 0,
+    hits: 0,
+    furyDodged: 0,
     ripostes: 0,
     counters: 0,
     lockouts: 0,
@@ -57,10 +60,13 @@ export class PlaytestLog {
         if (this.cur.fury) n.furyPerfect++;
         break;
       case 'block':
+        n.blocks++;
         if (this.cur.feint && ev.faults?.includes('early')) n.feintEarly++;
         if (ev.regain) n.regainChip += ev.damage ?? 0;
         break;
       case 'hit':
+        if (ev.perilous === undefined || ev.perilous === 'none') n.hits++;
+        if (this.cur.fury && ev.dodge) n.furyDodged++;
         if (this.cur.feint) n.feintHit++;
         if (this.cur.feint && ev.faults?.includes('early')) n.feintEarly++;
         break;
@@ -95,9 +101,10 @@ export class PlaytestLog {
     const min = Math.max(this.minutes, 1 / 60);
     return [
       { label: 'Time logged', value: `${this.minutes.toFixed(1)} min · ${n.swings} swings`, hint: 'Since the last reset' },
+      { label: 'Perfect rate (all guards)', value: `${pct(n.perfects, n.perfects + n.blocks + n.hits)}`, hint: 'Session 1 target 40-60 %; under 20 % = angle check too strict' },
       { label: 'Feints: perfect rate', value: `${pct(n.feintPerfect, n.feinted)} of ${n.feinted}`, hint: 'Rising over a session = you are reading the release' },
       { label: 'Feints: guarded too early', value: pct(n.feintEarly, n.feinted), hint: 'Falling = less rhythm-guessing' },
-      { label: 'Fury: perfect rate', value: `${pct(n.furyPerfect, n.fury)} of ${n.fury}`, hint: 'Under 30 % = window too tight for VR' },
+      { label: 'Fury: perfect rate', value: `${pct(n.furyPerfect, n.fury)} of ${n.fury} · ${n.furyDodged} tried to dodge`, hint: 'Under 30 % = too tight; many dodges = the colour reads as must-dodge' },
       { label: 'Riposte use', value: `${pct(n.ripostes, n.perfects)} of ${n.perfects} perfects`, hint: 'High = it pulls you into offence' },
       { label: 'Spam lockouts', value: `${n.lockouts} · ${(n.lockouts / min).toFixed(1)}/min`, hint: 'Should drop as you stop flailing' },
       { label: 'Charges built / used', value: `${n.charges} / ${n.chargedStrikes}`, hint: 'Built but unused = hand jitter breaks it, or no time' },

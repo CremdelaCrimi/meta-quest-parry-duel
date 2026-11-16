@@ -39,6 +39,44 @@ export interface MarquisParts {
   puffMat: THREE.MeshBasicMaterial;
 }
 
+/**
+ * Cheap rim light (Fresnel) baked into a lit material: a faint ivory edge so his dark teal coat and
+ * limbs stay readable against the dim hall without real lights or shadows (Gemini critique, 2026-11-16).
+ */
+export function addRim(mat: THREE.Material, color = 0xfff2dc, strength = 0.32, power = 2.6): void {
+  const c = new THREE.Color(color);
+  mat.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      `#include <dithering_fragment>
+      {
+        float rimF = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
+        gl_FragColor.rgb += vec3(${c.r.toFixed(3)}, ${c.g.toFixed(3)}, ${c.b.toFixed(3)}) * pow(rimF, ${power.toFixed(2)}) * ${strength.toFixed(2)};
+      }`,
+    );
+  };
+}
+
+/** Soft round shadow texture for the blob under his feet (no real-time shadows on Quest 2). */
+export function blobShadow(): THREE.Mesh {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const g = cv.getContext('2d')!;
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(0,0,0,0.65)');
+  grd.addColorStop(0.6, 'rgba(0,0,0,0.3)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.9, 0.7),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.renderOrder = 1;
+  return m;
+}
+
 /** Build the body into `body`; `coat` is the material that flashes when he's hit. */
 export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial): MarquisParts {
   const M = MARQUIS;
@@ -49,6 +87,8 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   const iron = new THREE.MeshStandardMaterial({ color: 0x2b2a28, roughness: 0.6, metalness: 0.6 });
   const trousers = new THREE.MeshLambertMaterial({ color: 0x1b1e26 });
   const ivory = new THREE.MeshLambertMaterial({ color: 0xe9e2d0 });
+  for (const mat of [coat, crimson, trousers, iron]) addRim(mat);
+  addRim(brass, 0xffe0a0, 0.25);
 
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z = 0) => {
     const mesh = new THREE.Mesh(geo, mat);
@@ -59,6 +99,7 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
 
   // Legs: dark trousers, brass knee joints, tall brass-leather boots.
   const boot = new THREE.MeshStandardMaterial({ color: 0x8a5e2a, roughness: 0.45, metalness: 0.5 });
+  addRim(boot, 0xffe0a0, 0.25);
   for (const sx of [-1, 1]) {
     add(new THREE.CylinderGeometry(0.075, 0.065, 0.42, 10), trousers, sx * 0.1, 0.69);
     add(new THREE.SphereGeometry(0.062, 10, 8), brass, sx * 0.1, 0.47);

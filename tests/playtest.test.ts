@@ -19,7 +19,7 @@ describe('playtest log', () => {
     expect(log.n).toMatchObject({ swings: 4, feinted: 2, feintEarly: 1, feintPerfect: 1, fury: 1, furyPerfect: 0, perfects: 2, ripostes: 1 });
     const rows = log.summary();
     expect(rows.find((r) => r.label.startsWith('Riposte'))?.value).toBe('50 % of 2 perfects');
-    expect(rows.find((r) => r.label === 'Fury: perfect rate')?.value).toBe('0 % of 1');
+    expect(rows.find((r) => r.label === 'Fury: perfect rate')?.value).toBe('0 % of 1 · 0 tried to dodge');
     expect(log.minutes).toBeCloseTo(0.11, 2);
   });
 

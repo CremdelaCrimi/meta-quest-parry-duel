@@ -19,7 +19,7 @@ export interface AbilityChip {
  */
 export class LeftHandView {
   readonly root = new THREE.Group();
-  readonly wrist = new CanvasPanel(512, 384, 0.11);
+  readonly wrist = new CanvasPanel(512, 384, 0.13); // ≥ 0.13 m so it reads at arm's length
   private readonly fingers: THREE.Object3D[] = [];
   private readonly thumb: THREE.Object3D;
   private readonly gourd = new THREE.Group();
