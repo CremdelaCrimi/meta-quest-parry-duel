@@ -119,3 +119,22 @@ Reset **menu → Playtest stats** before each session; set toggles in **menu →
 | 1. Baseline rhythm | Spam lockout only (feints, Fury, riposte, charge, regain off) | Perfect rate (all guards) 40-60 %; spam lockouts spike then drop under 2/min | perfect rate < 20 % → the 30° angle check is too strict |
 | 2. Cognitive load | Spam lockout, Feints, Fury | Feints: guarded too early (should fall); Fury perfect rate and "tried to dodge" | > 75 % of Fury swings hit you → the 400 ms glow is too short for VR |
 | 3. Aggressive flow | Everything (plus Charge if you want) | Guard Regain won back; riposte use per perfect | regain < 30 % → spacing or his recovery is too short to punish |
+
+## 7. Weapons, poses, UI style and Phase 2 (later rounds)
+
+- **Weapon assembly**: Gemini's 3 blades × 3 handles, renamed (Edge / Stiletto / Cleaver; Wrapped /
+  Fencer's / Pole). Its key VR insight: a heavy handle should register *slower* swings (lower strike
+  speed) but recover slowly, an agile one needs a wrist snap. Degenerate pair (heaviest blade on the
+  quickest handle) gets the "mismatch" penalty: +300 ms cooldown, no parry bonus.
+- **Pose sheet** (`img/brass-marquis-poses-gemini.png`): overhead, horizontal right/left, diagonal,
+  thrust, low sweep, posture-broken slump. Reference for future keyframe passes.
+- **UI style**: smoked charcoal `#12181C` at ~0.86, brass `#C5A059` 4 px border, a hairline inset
+  broken at the corners with brass dots, serif only for names and page titles. **Built** as
+  `brassFrame()` in `src/render/panels.ts`, used by every panel. Gemini also proposed new semantic
+  colours (block `#A0E8FF`, opening ivory, Fury magenta `#FF00FF`): not applied yet, see the colour
+  question in section 5.
+- **Phase 2** (toggle): spring snap, coat tails dropped, oversized cogs, alternating shoulder steam;
+  windups ×0.85, idle ×0.6, +15% feints, Fury allowed; "Winding Stair" string; signature
+  "Mainspring" (3 clanks at 900/600/300 ms before a Fury overhead; parry on the fourth beat).
+  Gemini proposed a 3 m instant lunge; we kept his normal 0.5 m step-in, because a 3 m teleport
+  reads as a glitch in VR and the rhythm is the real counter anyway.

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Duel } from '../core/sim';
 import type { AttackDef, SwordPose, V3 } from '../core/types';
 import { ATTACK_LUNGE, DuelSpace, ENEMY_DIST } from './duelSpace';
+import { MAINSPRING_CLANKS_MS } from '../core/enemies';
 import { MARQUIS, blobShadow, buildMarquis } from './marquis';
 import type { MarquisParts } from './marquis';
 import { RiggedEnemy } from './riggedEnemy';
@@ -323,6 +324,7 @@ export class EnemyView {
   private gearSpin = 0;
   private puffT = -1;
   private puffAttack = NaN;
+  private ventSide = 1;
 
   private readonly v1 = new THREE.Vector3();
   private readonly v2 = new THREE.Vector3();
@@ -571,15 +573,30 @@ export class EnemyView {
         P.puff.position.set(-side * MARQUIS.shoulderX, MARQUIS.shoulderY + 0.05, 0);
       }
     }
-    this.gearSpin += (animMs / 1000) * (hold ? 0 : winding ? 9 : 1.2);
+    const p2 = e.phase2;
+    this.gearSpin += (animMs / 1000) * (hold ? 0 : winding ? 9 : 1.2) * (p2 ? 2 : 1);
     for (const r of P.shoulderRings) r.rotation.x = this.gearSpin;
     P.cogs[0].rotation.z = this.gearSpin * 0.6;
     P.cogs[1].rotation.z = -this.gearSpin * 0.8;
-    P.key.rotation.z = this.gearSpin * 0.5;
-    // Broken: steam vents from his neck in bursts until he recovers or you finish him.
-    if (e.state === 'stagger' && this.puffT < 0) {
+    P.key.rotation.z = this.gearSpin * (p2 ? 1.5 : 0.5);
+    // Phase 2: the coat tails are gone, the clockwork shows, and the cogs run oversized.
+    for (const m of P.tails) m.visible = !p2;
+    for (const c of P.cogs) c.scale.setScalar(p2 ? 1.3 : 1);
+    // Mainspring: he sinks into a coiled squat and the key ratchets BACK a notch on each clank.
+    if (winding && att!.id === 'mainspring') {
+      const since = e.clock - e.attackStart;
+      const toHit = duel.windup(att!) - since;
+      this.body.position.y -= 0.14 * Math.min(1, since / 350);
+      const notches = MAINSPRING_CLANKS_MS.filter((ms) => toHit <= ms).length;
+      P.key.rotation.z = -notches * 0.9;
+    }
+    // Broken: steam vents from his neck in bursts until he recovers or you finish him. Phase 2
+    // vents from alternating shoulders all the time.
+    if ((e.state === 'stagger' || (p2 && e.state !== 'dead')) && this.puffT < 0) {
       this.puffT = 0;
-      P.puff.position.set(0, 1.7, -0.02);
+      this.ventSide = -this.ventSide;
+      if (e.state === 'stagger') P.puff.position.set(0, 1.7, -0.02);
+      else P.puff.position.set(this.ventSide * MARQUIS.shoulderX, MARQUIS.shoulderY + 0.08, 0.04);
     }
     if (this.puffT >= 0) {
       this.puffT += dtMs;

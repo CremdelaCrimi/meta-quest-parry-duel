@@ -50,6 +50,8 @@ export interface AttackDef {
   recoverMs: number;
   damage: number;
   postureDamage: number;
+  /** Always a Fury swing (parry only), e.g. Phase 2's signature move. */
+  fury?: boolean;
 }
 
 export interface ComboStep {
@@ -159,6 +161,14 @@ export interface TimingConfig {
   regainChip: number;
   regainMs: number;
   regainPerHit: number;
+  /** Phase 2: below this HP fraction he unwinds: faster windups, shorter pauses, more feints and
+   *  Fury, a new 3-hit string and a signature move picked with phase2SigChance. */
+  phase2At: number;
+  phase2Windup: number;
+  phase2Idle: number;
+  phase2FeintBonus: number;
+  phase2SigChance: number;
+  phase2StairChance: number;
   /** A dodge started within this long before the strike is a perfect dodge (counter + posture). */
   perfectDodgeMs: number;
   /** Posture a perfect dodge deals to him (half against a normal swing). */
@@ -288,7 +298,9 @@ export type DuelEventType =
   /** Charged strike ready (blade held still long enough). */
   | 'charged'
   /** Guard Regain won back HP. */
-  | 'regain';
+  | 'regain'
+  /** He dropped below phase2At HP and unwound (Phase 2 toggle). */
+  | 'phase2';
 
 /**
  * Why a guard wasn't a perfect parry (or wasn't a block at all). Several can apply at once.
@@ -311,6 +323,8 @@ export interface Mechanics {
   charge: boolean;
   /** Blocks cost HP you can win back by hitting him soon after. */
   guardRegain: boolean;
+  /** Below half HP he sheds his coat and fights faster, with a signature move. */
+  phase2: boolean;
 }
 
 export interface DuelEvent {

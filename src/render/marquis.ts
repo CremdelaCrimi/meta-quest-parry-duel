@@ -32,6 +32,8 @@ export interface MarquisParts {
   opticMat: THREE.MeshBasicMaterial;
   /** Brass cup guard, placed at the blade's hilt every frame. */
   cup: THREE.Mesh;
+  /** Coat tails and linings: dropped in Phase 2, showing the clockwork. */
+  tails: THREE.Mesh[];
   /** Wind-up key on his back: spins faster as he winds up a swing. */
   key: THREE.Group;
   /** A puff that marks the start of a feint's hold at the sword shoulder. */
@@ -126,11 +128,13 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   add(new THREE.SphereGeometry(0.06, 12, 8), coreMat, 0, 1.2, -0.08);
   add(new THREE.TorusGeometry(0.07, 0.014, 6, 16), brass, 0, 1.2, -0.11);
   // Coat tails, crimson-lined, flaring behind.
+  const tails: THREE.Mesh[] = [];
   for (const sx of [-1, 1]) {
     const tail = add(new THREE.BoxGeometry(0.15, 0.6, 0.02), coat, sx * 0.085, 0.86, 0.14);
     tail.rotation.x = -0.18;
     const lining = add(new THREE.BoxGeometry(0.13, 0.56, 0.01), crimson, sx * 0.085, 0.87, 0.125);
     lining.rotation.x = -0.18;
+    tails.push(tail, lining);
   }
   // Collar, neck, porcelain mask with a vertical brass slit and a glowing optic.
   add(new THREE.CylinderGeometry(0.1, 0.12, 0.07, 12), crimson, 0, 1.63);
@@ -182,5 +186,5 @@ export function buildMarquis(body: THREE.Group, coat: THREE.MeshLambertMaterial)
   const puff = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), puffMat);
   puff.visible = false;
   body.add(puff);
-  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, key, puff, puffMat };
+  return { shoulderRings, shoulders, cogs, coreMat, opticMat, cup, tails, key, puff, puffMat };
 }

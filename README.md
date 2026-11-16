@@ -121,6 +121,7 @@ text, rumble, graphics). Results also pop as rising words at the clash point (PE
 | Charged strike | off | Hold the sword still (tip under 0.35 m/s) with block released for 1.2 s: a brass ring closes on his chest, your blade turns white-hot. The next swing within 0.9 s does ×1.6 damage and +30 posture even if he deflects it. |
 | Guard Regain | off | Blocks cost 50% of the swing as HP, shown ivory on your HP bar; hit him within 2.5 s to win it back. A clean hit on you forfeits it. |
 | Spam lockout | ON | More than 3 guard entries in 700 ms locks perfect parries for 350 ms. |
+| Phase 2 | off | Below half HP he **unwinds**: a spring snaps, his coat tails drop, cogs run oversized and steam vents. Windups ×0.85, pauses ×0.6, +15% feints, Fury swings even with the Fury toggle off, the **Winding Stair** string (right, left, then straight into an overhead) and his signature **Mainspring**: he sinks into a squat and his key ratchets back with three clanks 300 ms apart; a Fury overhead lands on the fourth beat. Perfect-parry it HIGH on that beat. |
 
 **Playtest stats** (menu, next to Mechanics) measure each one live: perfect rate and early-guard
 rate on feints, perfect rate on Fury swings (under 30% = too tight), riposte use per perfect, spam

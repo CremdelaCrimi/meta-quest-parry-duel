@@ -9,10 +9,10 @@ import type { Pickup } from './core/roguelite';
 import { Duel, dodgeBeats } from './core/sim';
 import { Footwork } from './core/footwork';
 import { PlaytestLog } from './core/playtest';
-import { ATTACKS } from './core/enemies';
+import { ATTACKS, MAINSPRING_CLANKS_MS } from './core/enemies';
 import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, Mechanics, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
-import { CanvasPanel, bar, roundRect } from './render/panels';
+import { CanvasPanel, bar, brassFrame, roundRect } from './render/panels';
 import { EnemyView, Shockwaves, Sparks, SwingTrail, SwordView, contactPoint } from './render/views';
 import { ATTACK_LUNGE, ENEMY_DIST } from './render/duelSpace';
 import type { InputDevice } from './xr/input';
@@ -60,6 +60,7 @@ const ENEMY_REACH = 1.75;
 const UP = new THREE.Vector3(0, 1, 0);
 /** Fury (parry-only) swings: ember orange, distinct from red must-dodge attacks. */
 const FURY_COLOR = '#ff7a1a';
+const FURY_HEX = parseInt(FURY_COLOR.slice(1), 16);
 /** Your reach to his body axis: arm forward + blade + his body radius (m). */
 const ARM_M = 0.55;
 const BODY_R = 0.27;
@@ -227,6 +228,8 @@ export class Game {
   })();
   /** Heal: golden rings sweeping up around you. */
   private readonly healAura = new HealAura();
+  private clankKey = NaN;
+  private clanks = 0;
   /** Words that pop at the clash point and rise (PERFECT, RIPOSTE...). */
   private readonly floats = new FloatText();
   /** Point-aim mode: a line from your left hand showing where the arm will go (gold = on target). */
@@ -650,6 +653,20 @@ export class Game {
     // Red attack about to land: a distinct chime 400 ms out (the dodge cue).
     const ra = this.duel.currentAttack;
     const re = this.duel.enemy;
+    // Mainspring: a clank on each ratchet (900/600/300 ms out); parry on the fourth beat.
+    if (ra?.id === 'mainspring' && !re.struck) {
+      if (this.clankKey !== re.attackStart) {
+        this.clankKey = re.attackStart;
+        this.clanks = 0;
+      }
+      const toHit = this.duel.windup(ra) - (re.clock - re.attackStart);
+      const due = MAINSPRING_CLANKS_MS.filter((ms) => toHit <= ms).length;
+      while (this.clanks < due) {
+        this.clanks++;
+        this.sfx.play('clank');
+        this.input.pulse('left', 0.35, 30);
+      }
+    }
     if (ra && ra.perilous !== 'none' && !re.struck && this.chimeKey !== re.attackStart && this.duel.windup(ra) - (re.clock - re.attackStart) <= 400) {
       this.chimeKey = re.attackStart;
       this.sfx.play('chime');
@@ -771,6 +788,14 @@ export class Game {
         this.sfx.play('chime', 0.35);
         this.input.pulse('right', 0.35, 60);
         this.flashResult('CHARGED · swing to crush his posture', '#fff2d0', t);
+        break;
+      case 'phase2':
+        this.sfx.play('spring');
+        this.input.pulse('right', 0.8, 200);
+        this.input.pulse('left', 0.8, 200);
+        this.waves.emit(this.enemyView.chestWorld(this.space, this.tmp3), FURY_HEX, 1.2, 700);
+        this.sparks.burst(this.tmp3, 0xd8b060, 50, 2.4);
+        this.flashResult('HE UNWINDS · faster, and listen for three clanks', FURY_COLOR, t);
         break;
       case 'regain':
         this.sfx.play('chime', 0.3);
@@ -1382,6 +1407,7 @@ export class Game {
       const left = Math.max(0, d.windup(att) - (e.clock - e.attackStart));
       if (att.perilous === 'thrust') out.push(['RED THRUST: DODGE SIDEWAYS', C.RED, 40], ['Lean or flick the left stick sideways after the chime. Last 150 ms = PERFECT (counter); earlier = safe only.', C.TEXT, 30]);
       else if (att.perilous === 'sweep') out.push(['RED SWEEP: DUCK OR DASH BACK', C.RED, 40], ['Duck or flick the left stick back after the chime. Last 150 ms = PERFECT (counter); earlier = safe only.', C.TEXT, 30]);
+      else if (e.fury) out.push([att.id === 'mainspring' ? 'MAINSPRING: PERFECT PARRY HIGH' : 'FURY: PERFECT PARRY ONLY', FURY_COLOR, 40], [att.id === 'mainspring' ? 'Count the three clanks; guard high ON the fourth beat. Blocks and dodges fail.' : 'A block or dodge fails. Guard exactly as the ring turns gold, or step out of his reach.', C.TEXT, 30]);
       else {
         const [title, how] = calloutFor(att);
         const btn = this.settings.blockButton ? (this.isXR ? ' and HOLD RIGHT GRIP' : ' and HOLD SHIFT') : '';
@@ -1751,6 +1777,7 @@ export class Game {
       toggle('guardRegain', 'Guard Regain', 'Blocks cost HP (ivory on your bar); hit him soon to win it back'),
       num('regainMs', 'regain time', 250, 500, 6000, 'ms'),
       toggle('spamLock', 'Spam lockout', 'Flailing the guard locks perfect parries for a moment'),
+      toggle('phase2', 'Phase 2 (half HP)', 'He sheds his coat: faster, more feints and Fury, Winding Stair string, Mainspring signature'),
       {
         label: 'All mechanics to defaults',
         act: () => {
@@ -1929,9 +1956,7 @@ export class Game {
     const d = this.duel;
     const c = this.timing;
     this.hud.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.72)';
-      roundRect(ctx, 0, 0, w, h, 28);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.8);
       ctx.font = '600 34px system-ui, sans-serif';
       ctx.fillStyle = '#cfd4dc';
       ctx.fillText(`Fight ${this.run.fight + 1} · ${d.enemy.def.name} · ${c.name}`, 32, 56);
@@ -2045,9 +2070,7 @@ export class Game {
   private drawHelp(): void {
     const xr = this.isXR;
     this.help.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.85)';
-      roundRect(ctx, 0, 0, w, h, 28);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.88);
       let y = 70;
       const line = (text: string, font: string, color: string, gap: number) => {
         ctx.font = font;
@@ -2092,9 +2115,7 @@ export class Game {
     const p = d.player;
     const pf = p.posture / this.timing.playerPostureMax;
     this.status.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.7)';
-      roundRect(ctx, 0, 0, w, h, 30);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.8);
       ctx.font = '800 34px system-ui, sans-serif';
       ctx.fillStyle = '#e8e8e8';
       ctx.fillText('YOU', 26, 50);
@@ -2212,7 +2233,7 @@ export class Game {
     const t = this.lastT;
     const teach = this.settings.callouts || this.run.fight === 0 || this.training;
     // Must-dodge attacks are always named: they arrive after the Trainer and can't be blocked.
-    const swing = this.phase === 'fight' && !!att && (teach || att.perilous !== 'none') && e.state === 'attack' && !e.struck;
+    const swing = this.phase === 'fight' && !!att && (teach || att.perilous !== 'none' || !!att.fury) && e.state === 'attack' && !e.struck;
     const result = !swing && this.settings.results && t - this.lastResult.t < 1100;
     const k = swing ? `${att!.id}@${e.attackStart}` : result ? `r${this.lastResult.t}` : '';
     this.callout.mesh.visible = swing || result;
@@ -2220,9 +2241,7 @@ export class Game {
     this.calloutKey = k;
     const [title, how, color] = swing ? calloutFor(att!) : [this.lastResult.text, '', this.lastResult.color];
     this.callout.draw((ctx, w) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.7)';
-      roundRect(ctx, how ? 0 : 120, how ? 0 : 20, how ? w : w - 240, how ? 170 : 110, 28);
-      ctx.fill();
+      brassFrame(ctx, how ? 0 : 120, how ? 0 : 20, how ? w : w - 240, how ? 170 : 110, 0.8);
       ctx.textAlign = 'center';
       ctx.font = '800 60px system-ui, sans-serif';
       ctx.fillStyle = color;
@@ -2287,9 +2306,7 @@ export class Game {
   private showBanner(title: string, color: string, sub: string): void {
     this.banner.mesh.visible = true;
     this.banner.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.7)';
-      roundRect(ctx, 0, 0, w, h, 30);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.8);
       ctx.textAlign = 'center';
       ctx.fillStyle = color;
       ctx.font = '800 92px system-ui, sans-serif';
@@ -2408,6 +2425,7 @@ function copyPose(o: SwordPose, a: SwordPose): void {
 
 /** [title, how to block, colour] for an attack's callout. Left/right = the side of YOU it lands on. */
 function calloutFor(a: AttackDef): [string, string, string] {
+  if (a.id === 'mainspring') return ['MAINSPRING', 'Three clanks · PERFECT parry HIGH on the 4th beat', FURY_COLOR];
   if (a.perilous === 'thrust') return ['THRUST', 'Lean or dash sideways!', COLORS.hit];
   if (a.perilous === 'sweep') return ['SWEEP', 'Duck or dash back!', COLORS.hit];
   if (a.dir === 'high') return ['↓  VERTICAL', 'Block: sword flat above your head', COLORS.info];

@@ -1,6 +1,7 @@
 import { DodgeDetector } from './dodge';
 import type { DodgeHit } from './dodge';
 import { CHAIN_MULT, FRENZY, MECH_DEFAULTS } from './config';
+import { PHASE2 } from './enemies';
 import { classifyGuard, lerpPose, lerpV3, makePose } from './guard';
 import type { GuardReading } from './guard';
 import { Rng } from './rng';
@@ -121,6 +122,8 @@ export class Duel {
     feintMs: 0,
     /** Current swing is a Fury (parry-only). */
     fury: false,
+    /** Phase 2: he has unwound (below phase2At HP with the toggle on). */
+    phase2: false,
     /** Side he holds his sword on while idle; strikes to the other side get through. */
     guardSide: 'right' as GuardSide,
     /** Enemy-clock time he next moves his idle guard. */
@@ -357,6 +360,7 @@ export class Duel {
 
     this.heldPrev = this.heldCurr;
     if (inp.strikeSpeed > 0 && !this.player.dead) this.onPlayerStrike(inp.t1, inp.strikeZone ?? 'center', !!inp.strikePoke);
+    this.checkPhase2(inp.t1);
     this.regen(span, inp.t1);
     this.time = inp.t1;
   }
@@ -779,6 +783,7 @@ export class Duel {
     const e = this.enemy;
     if (e.hp <= 0 && this.practice) {
       e.hp = e.def.hp;
+      e.phase2 = false;
       this.emit({ type: 'practiceReset', t, who: 'enemy' });
       return false;
     }
@@ -815,14 +820,15 @@ export class Duel {
     e.state = 'attack';
     e.attackStart = eStart;
     e.struck = false;
-    e.windupScale = this.frenzy()?.windup ?? 1;
+    e.windupScale = (this.frenzy()?.windup ?? 1) * (e.phase2 ? this.cfg.phase2Windup : 1);
     const att = this.currentAttack!;
     // Both rolls are drawn every attack so switching a mechanic never changes what else happens.
     const rf = this.mechRng.next();
     const rh = this.mechRng.next();
     const rd = this.mechRng.range(this.cfg.feintMinMs, this.cfg.feintMaxMs);
-    e.feintMs = this.mech.feints && rf < this.cfg.feintChance ? rd : 0;
-    e.fury = this.mech.fury && att.perilous === 'none' && rh < this.cfg.furyChance;
+    const feintChance = this.cfg.feintChance + (e.phase2 ? this.cfg.phase2FeintBonus : 0);
+    e.feintMs = (this.mech.feints || e.phase2) && !att.fury && rf < feintChance ? rd : 0;
+    e.fury = !!att.fury || ((this.mech.fury || e.phase2) && att.perilous === 'none' && rh < this.cfg.furyChance);
     this.emit({ type: 'attackStart', t, attackId: att.id, dir: att.dir, perilous: att.perilous, fury: e.fury, feintMs: e.feintMs });
   }
 
@@ -842,7 +848,14 @@ export class Duel {
         if (this.ai && e.clock >= e.nextActionAt) {
           const tw = this.frenzy()?.tripleWeight ?? 1;
           const pool = tw === 1 ? e.def.combos : e.def.combos.map((c) => ({ ...c, weight: c.steps.length === 3 ? c.weight * tw : c.weight }));
-          this.startCombo(this.rng.pickWeighted(pool), e.nextActionAt, t);
+          const normal = this.rng.pickWeighted(pool); // always drawn, so Phase 2 never shifts the main stream
+          let pick = normal;
+          if (e.phase2) {
+            const r = this.mechRng.next();
+            if (r < this.cfg.phase2SigChance) pick = PHASE2.signature;
+            else if (r < this.cfg.phase2SigChance + this.cfg.phase2StairChance) pick = PHASE2.stair;
+          }
+          this.startCombo(pick, e.nextActionAt, t);
         }
         break;
       case 'attack': {
@@ -858,7 +871,7 @@ export class Duel {
         } else {
           const end = strikeE + st.attack.recoverMs / spd;
           if (e.clock >= end) {
-            this.toIdle(end, (this.rng.range(e.def.idleMinMs, e.def.idleMaxMs) / spd) * (this.frenzy()?.idle ?? 1));
+            this.toIdle(end, (this.rng.range(e.def.idleMinMs, e.def.idleMaxMs) / spd) * (this.frenzy()?.idle ?? 1) * (e.phase2 ? this.cfg.phase2Idle : 1));
           }
         }
         break;
@@ -872,6 +885,14 @@ export class Duel {
       case 'dead':
         break;
     }
+  }
+
+  /** Phase 2 starts the first time he drops below phase2At HP (toggle on); his next attack uses it. */
+  private checkPhase2(t: number): void {
+    const e = this.enemy;
+    if (!this.mech.phase2 || e.phase2 || e.state === 'dead' || e.hp / e.def.hp >= this.cfg.phase2At) return;
+    e.phase2 = true;
+    this.emit({ type: 'phase2', t });
   }
 
   /** Charged strike: hold the blade still with the block released; the charge survives the swing's start. */

@@ -1,7 +1,7 @@
 // Procedurally synthesised sound effects, pre-rendered into AudioBuffers once
 // so playback is a single buffer-source start (lowest latency WebAudio offers).
 
-export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui' | 'whoosh' | 'chime' | 'clash' | 'grapple';
+export type SfxName = 'perfect' | 'block' | 'hit' | 'peril' | 'dodge' | 'strike' | 'finisher' | 'ui' | 'whoosh' | 'chime' | 'clash' | 'grapple' | 'clank' | 'spring';
 
 export class Sfx {
   private ctx: AudioContext | null = null;
@@ -60,6 +60,10 @@ export class Sfx {
     });
     // Perfect dodge: a heavy metallic clash with a low thump.
     make('clash', 0.9, (t) => Math.exp(-t * 5) * (sin(990, t) + 0.8 * sin(1870, t) + 0.5 * sin(3110, t)) + Math.exp(-t * 14) * sin(70, t) * 1.5 + noise() * Math.exp(-t * 50));
+    // Mainspring ratchet: a heavy, dry metallic clank (the beat you parry on).
+    make('clank', 0.22, (t) => Math.exp(-t * 28) * (sin(310, t) + 0.8 * sin(745, t) + 0.4 * sin(1630, t)) + noise() * Math.exp(-t * 90) * 0.9);
+    // Phase 2: a spring snapping loose, a falling twang with a rattle.
+    make('spring', 1.0, (t) => Math.exp(-t * 3.5) * sin(520 * (1 - 0.45 * t), t) * (0.6 + 0.4 * sin(31, t)) + noise() * Math.exp(-t * 25) * 0.7);
     // Grapple wire: a fast descending zip.
     make('grapple', 0.25, (t) => Math.exp(-t * 10) * sin(1800 * (1 - t * 2.5), t) * 0.8 + noise() * Math.exp(-t * 30) * 0.4);
   }

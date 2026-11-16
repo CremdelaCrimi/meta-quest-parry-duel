@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CanvasPanel, roundRect } from './panels';
+import { CanvasPanel, brassFrame, roundRect } from './panels';
 
 /** One ability chip on the wrist / status strip. */
 export interface AbilityChip {
@@ -100,9 +100,7 @@ export class LeftHandView {
   /** Redraw the wrist panel (call at a few Hz: texture uploads aren't free). */
   drawWrist(chips: AbilityChip[], drink: number): void {
     this.wrist.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.88)';
-      roundRect(ctx, 0, 0, w, h, 28);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.9);
       drawChips(ctx, chips, 16, 16, w - 32, (h - 32 - (drink > 0 ? 44 : 0)) / chips.length);
       if (drink > 0) {
         ctx.fillStyle = 'rgba(255,255,255,0.15)';

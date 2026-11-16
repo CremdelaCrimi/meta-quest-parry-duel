@@ -1,6 +1,6 @@
 import type { Perilous } from '../core/types';
 import type { CanvasPanel } from './panels';
-import { roundRect } from './panels';
+import { brassFrame } from './panels';
 
 const FONT = 'system-ui, sans-serif';
 const GOLD = '#ffd34d';
@@ -49,9 +49,7 @@ export interface TimelineData {
  */
 export function drawTimeline(panel: CanvasPanel, d: TimelineData | null, idleText: string[]): void {
   panel.draw((ctx, w, h) => {
-    ctx.fillStyle = 'rgba(10,12,18,0.86)';
-    roundRect(ctx, 0, 0, w, h, 26);
-    ctx.fill();
+    brassFrame(ctx, 0, 0, w, h, 0.88);
     ctx.fillStyle = DIM;
     ctx.font = `700 26px ${FONT}`;
     ctx.fillText('SWING TIMELINE', 28, 40);
@@ -167,9 +165,7 @@ export function drawTimeline(panel: CanvasPanel, d: TimelineData | null, idleTex
 /** Big plain-language coaching: what he's doing right now and what you should do about it. */
 export function drawCoach(panel: CanvasPanel, header: string, lines: Array<[string, string, number]>, footer: string): void {
   panel.draw((ctx, w, h) => {
-    ctx.fillStyle = 'rgba(10,12,18,0.86)';
-    roundRect(ctx, 0, 0, w, h, 26);
-    ctx.fill();
+    brassFrame(ctx, 0, 0, w, h, 0.88);
     ctx.fillStyle = GOLD;
     ctx.font = `800 34px ${FONT}`;
     ctx.fillText(header, 28, 50);

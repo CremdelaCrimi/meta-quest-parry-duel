@@ -37,9 +37,26 @@ export const ATTACKS = {
   slashLow: atk('slashLow', 'low', 620),
   thrust: atk('thrust', 'high', 900, { perilous: 'thrust', damage: 26, postureDamage: 0, recoverMs: 900 }),
   sweep: atk('sweep', 'high', 900, { perilous: 'sweep', damage: 26, postureDamage: 0, recoverMs: 900 }),
+  // Phase 2 signature: his key ratchets back three times (a clank every 300 ms), then a Fury
+  // overhead lands on the fourth beat. Only a perfect parry (high guard) on that beat stops it.
+  mainspring: atk('mainspring', 'high', 1300, { swing: 'vertical', damage: 28, postureDamage: 40, recoverMs: 1000, fury: true }),
 } satisfies Record<string, AttackDef>;
 
 const A = ATTACKS;
+
+/** The Mainspring's three clanks, as ms before the strike: the rhythm is the counter. */
+export const MAINSPRING_CLANKS_MS = [900, 600, 300];
+
+/** Phase 2 strings (Gemini consult 2026-11-16). */
+export const PHASE2 = {
+  /** "Winding Stair": right, left, then straight into an overhead with a near-zero gap. */
+  stair: { weight: 1, steps: [
+    { attack: A.slashRight, chainDelayMs: 220 },
+    { attack: A.slashLeft, chainDelayMs: 120 },
+    { attack: A.slashHigh, chainDelayMs: 0 },
+  ] },
+  signature: { weight: 1, steps: [{ attack: A.mainspring, chainDelayMs: 0 }] },
+};
 
 /**
  * Attack patterns are strings of 1, 2 or 3 hits with a fixed rhythm per enemy (`beatMs` between

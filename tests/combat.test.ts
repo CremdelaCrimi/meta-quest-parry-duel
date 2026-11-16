@@ -558,6 +558,25 @@ describe('mechanic toggles', () => {
     expect(more.find((e) => e.type === 'regain')?.damage).toBeCloseTo(Math.min(chip, T.playerDamage));
   });
 
+  it('Phase 2 starts below half HP: faster windups, and his signature move is a Fury swing', () => {
+    const d = makeDuel({ mech: { phase2: true } });
+    d.enemy.hp = d.enemy.def.hp * 0.5 + 1;
+    const evs = drive(d, () => POSES.neutral, 200, 90, { strikeAt: [100], zone: d.enemy.guardSide === 'left' ? 'right' : 'left' });
+    expect(evs.some((e) => e.type === 'phase2')).toBe(true);
+    expect(d.enemy.phase2).toBe(true);
+    script(d, L, 300);
+    expect(d.windup(L)).toBeCloseTo(L.windupMs * T.phase2Windup * (d.frenzy()?.windup ?? 1)); // stacks with frenzy
+    const sig = makeDuel({ mech: { phase2: true } });
+    sig.enemy.phase2 = true;
+    script(sig, ATTACKS.mainspring, START);
+    expect(sig.enemy.fury).toBe(true);
+    expect(sig.enemy.feintMs).toBe(0); // the clank rhythm is the counter: never delayed
+    // Off: no phase change at any HP.
+    const off = makeDuel();
+    off.enemy.hp = 1;
+    expect(drive(off, () => POSES.neutral, 100).some((e) => e.type === 'phase2')).toBe(false);
+  });
+
   it('spam lock can be switched off', () => {
     const flail = schedule([
       [100, POSES.left], [160, POSES.neutral], [220, POSES.right], [280, POSES.neutral],

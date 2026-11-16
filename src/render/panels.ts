@@ -45,3 +45,47 @@ export function bar(ctx: CanvasRenderingContext2D, x: number, y: number, w: numb
   ctx.fillStyle = color;
   ctx.fillRect(x, y, w * Math.max(0, Math.min(1, f)), h);
 }
+
+/**
+ * The one panel style (Belle Epoque, legible in VR; Gemini UI spec 2026-11-16): smoked-charcoal
+ * glass, a polished brass border, and an inset hairline that stops short of each corner and ends
+ * in small brass dots. Sizes scale with the canvas (spec is for a 1024 px wide canvas).
+ */
+export const UI = {
+  bg: (a = 0.86) => `rgba(18,24,28,${a})`,
+  brass: '#c5a059',
+  /** Serif for thematic headers only (names, page titles); everything you read fast stays sans. */
+  serif: 'Georgia, "Noto Serif", "Times New Roman", serif',
+} as const;
+
+export function brassFrame(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, alpha = 0.86): void {
+  const s = Math.max(0.5, ctx.canvas.width / 1024);
+  const r = 16 * s;
+  ctx.fillStyle = UI.bg(alpha);
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+  ctx.strokeStyle = UI.brass;
+  ctx.lineWidth = 4 * s;
+  roundRect(ctx, x + 2 * s, y + 2 * s, w - 4 * s, h - 4 * s, r - 2 * s);
+  ctx.stroke();
+  // Inset hairline, broken at the corners, each end finished with a brass dot.
+  const i = 10 * s;
+  const gap = 24 * s;
+  const x0 = x + i, y0 = y + i, x1 = x + w - i, y1 = y + h - i;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1.5 * s;
+  ctx.beginPath();
+  ctx.moveTo(x0 + gap, y0); ctx.lineTo(x1 - gap, y0);
+  ctx.moveTo(x0 + gap, y1); ctx.lineTo(x1 - gap, y1);
+  ctx.moveTo(x0, y0 + gap); ctx.lineTo(x0, y1 - gap);
+  ctx.moveTo(x1, y0 + gap); ctx.lineTo(x1, y1 - gap);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = UI.brass;
+  const dot = (dx: number, dy: number) => {
+    ctx.beginPath();
+    ctx.arc(dx, dy, 3 * s, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  for (const [dx, dy] of [[x0 + gap, y0], [x1 - gap, y0], [x0 + gap, y1], [x1 - gap, y1], [x0, y0 + gap], [x0, y1 - gap], [x1, y0 + gap], [x1, y1 - gap]]) dot(dx, dy);
+}

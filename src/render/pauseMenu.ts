@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { InputFrame } from '../xr/input';
-import { CanvasPanel, roundRect } from './panels';
+import { CanvasPanel, UI, brassFrame, roundRect } from './panels';
 
 /** One row in the menu: an action (act) or a setting you step through left/right (change). */
 export interface MenuItem {
@@ -14,7 +14,6 @@ export interface MenuItem {
   hidden?: boolean;
 }
 
-const BG = 'rgba(10,12,18,0.92)';
 const GOLD = '#ffd34d';
 const TEXT = '#e0e4ea';
 const DIM = '#7c8594';
@@ -144,11 +143,9 @@ export class PauseMenu {
   private drawMain(): void {
     const xr = this.isXR();
     this.panel.draw((ctx, w, h) => {
-      ctx.fillStyle = BG;
-      roundRect(ctx, 0, 0, w, h, 32);
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `800 60px ${FONT}`;
+      brassFrame(ctx, 0, 0, w, h, 0.93);
+      ctx.fillStyle = '#f2ede0';
+      ctx.font = `600 58px ${UI.serif}`;
       ctx.fillText(this.title, 48, 88);
       ctx.fillStyle = DIM;
       ctx.font = `500 28px ${FONT}`;
@@ -208,9 +205,7 @@ export class PauseMenu {
   private drawControls(): void {
     const xr = this.isXR();
     this.panel.draw((ctx, w, h) => {
-      ctx.fillStyle = BG;
-      roundRect(ctx, 0, 0, w, h, 32);
-      ctx.fill();
+      brassFrame(ctx, 0, 0, w, h, 0.93);
       ctx.fillStyle = '#ffffff';
       ctx.font = `800 56px ${FONT}`;
       ctx.fillText(xr ? 'CONTROLLERS' : 'KEYS', 48, 84);
