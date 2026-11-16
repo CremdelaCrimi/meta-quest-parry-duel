@@ -71,7 +71,10 @@ charge only builds with the block button released, so a held guard isn't a free 
 
 | Proposal | Status |
 |---|---|
-| Enemy gauges as curved brass tubes 0.5 m above his head; HP crimson `#8B0000`, posture teal | later (current flat panel kept) |
+| Enemy gauges as curved brass tubes above his head | **built** (crimson HP `#c62a2a`, amber posture: `#8B0000` and teal are too dark to read in a headset) |
+| Belle Epoque hall with gaslight (from the mock-up `img/vr-hud-mockup-gemini.png`) | **built**: warm palette, brass pillar caps, 10 additive gas-flame sconces, no real lights (Quest 2) |
+| Posture break: slump, steam venting from the neck | **built** (steam bursts from the neck while broken) |
+| Measurable playtest signal per mechanic | **built**: menu → Playtest stats (`src/core/playtest.ts`) |
 | Guard Regain as an ivory `#FFFFF0` extension of the HP bar | **built** (on your HP bar) |
 | Move the status strip to the wrist only (-30° below eye line) | not taken: the strip keeps cooldowns readable without looking down; the wrist watch shows the same |
 | Feint tell: shoulder joint stalls, steam puff, metallic click | **built** (gears + key stall, puff) |

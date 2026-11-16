@@ -23,16 +23,17 @@ renderer.xr.setFoveation(gfx.foveation); // fixed foveated rendering: cheap GPU 
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0e1118);
-scene.fog = new THREE.Fog(0x0e1118, 6, 16);
+// A dim Belle Epoque hall lit by gas sconces: warm darks, brass and crimson (Gemini mock-up 2026-11-16).
+scene.background = new THREE.Color(0x14100d);
+scene.fog = new THREE.Fog(0x14100d, 6, 16);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 50);
 camera.position.set(0, 1.6, 0);
 
 // ---------------------------------------------------------------- arena (cheap: no shadows, no post-processing)
 
-scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x2a2420, 1.4));
-const sun = new THREE.DirectionalLight(0xfff0dd, 1.6);
+scene.add(new THREE.HemisphereLight(0xffe2bd, 0x2a1d16, 1.35));
+const sun = new THREE.DirectionalLight(0xffe8cc, 1.5);
 sun.position.set(2, 5, 1);
 scene.add(sun);
 
@@ -40,7 +41,7 @@ scene.add(sun);
 // arena around him, so he stays dead centre in your view while the world swings past.
 const arena = new THREE.Group();
 scene.add(arena);
-const floor = new THREE.Mesh(new THREE.CircleGeometry(7, 48), new THREE.MeshLambertMaterial({ color: 0x2a2d33 }));
+const floor = new THREE.Mesh(new THREE.CircleGeometry(7, 48), new THREE.MeshLambertMaterial({ color: 0x2e241d }));
 floor.rotation.x = -Math.PI / 2;
 arena.add(floor);
 const ring = new THREE.Mesh(new THREE.RingGeometry(2.6, 2.7, 64), new THREE.MeshBasicMaterial({ color: 0x5a1c1c }));
@@ -48,12 +49,48 @@ ring.rotation.x = -Math.PI / 2;
 ring.position.y = 0.002;
 arena.add(ring);
 const pillarGeo = new THREE.BoxGeometry(0.5, 4, 0.5);
-const pillarMat = new THREE.MeshLambertMaterial({ color: 0x3b3f48 });
+const pillarMat = new THREE.MeshLambertMaterial({ color: 0x4a4038 });
+const capGeo = new THREE.BoxGeometry(0.62, 0.12, 0.62);
+const brassMat = new THREE.MeshLambertMaterial({ color: 0x8a6d2f });
+// Gas sconces: a brass bracket and an additive flame + halo per pillar. No real lights (Quest 2 cost).
+const flameMat = new THREE.MeshBasicMaterial({ color: 0xffb050, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+const haloTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,190,110,0.9)');
+  grd.addColorStop(0.35, 'rgba(255,150,60,0.35)');
+  grd.addColorStop(1, 'rgba(255,120,40,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const haloMat = new THREE.SpriteMaterial({ map: haloTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+const flameGeo = new THREE.ConeGeometry(0.035, 0.12, 8);
 for (let i = 0; i < 10; i++) {
   const a = (i / 10) * Math.PI * 2;
   const p = new THREE.Mesh(pillarGeo, pillarMat);
   p.position.set(Math.cos(a) * 6, 2, Math.sin(a) * 6);
   arena.add(p);
+  for (const y of [0.06, 3.94]) {
+    const cap = new THREE.Mesh(capGeo, brassMat);
+    cap.position.set(p.position.x, y, p.position.z);
+    arena.add(cap);
+  }
+  // Sconce on the inner face of the pillar, at head height.
+  const inX = Math.cos(a) * 5.68;
+  const inZ = Math.sin(a) * 5.68;
+  const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.03, 0.1, 8), brassMat);
+  bracket.position.set(inX, 2.0, inZ);
+  arena.add(bracket);
+  const flame = new THREE.Mesh(flameGeo, flameMat);
+  flame.position.set(inX, 2.11, inZ);
+  arena.add(flame);
+  const halo = new THREE.Sprite(haloMat);
+  halo.scale.setScalar(0.7);
+  halo.position.set(inX, 2.1, inZ);
+  arena.add(halo);
 }
 
 // ---------------------------------------------------------------- game

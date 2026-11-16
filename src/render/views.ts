@@ -574,6 +574,11 @@ export class EnemyView {
     P.cogs[0].rotation.z = this.gearSpin * 0.6;
     P.cogs[1].rotation.z = -this.gearSpin * 0.8;
     P.key.rotation.z = this.gearSpin * 0.5;
+    // Broken: steam vents from his neck in bursts until he recovers or you finish him.
+    if (e.state === 'stagger' && this.puffT < 0) {
+      this.puffT = 0;
+      P.puff.position.set(0, 1.7, -0.02);
+    }
     if (this.puffT >= 0) {
       this.puffT += dtMs;
       const k = this.puffT / 320;

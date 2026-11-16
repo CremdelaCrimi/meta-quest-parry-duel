@@ -8,6 +8,7 @@ import { Run } from './core/roguelite';
 import type { Pickup } from './core/roguelite';
 import { Duel, dodgeBeats } from './core/sim';
 import { Footwork } from './core/footwork';
+import { PlaytestLog } from './core/playtest';
 import { ATTACKS } from './core/enemies';
 import type { AbilityId, AttackDef, DashDir, DuelEvent, Fault, Mechanics, StrikeZone, SwordPose, TimingConfig, V3 } from './core/types';
 import { DuelSpace } from './render/duelSpace';
@@ -177,6 +178,8 @@ export class Game {
   private blockWas = false;
   /** Enemy footwork (fixed duel frame) and the player's position in that frame this frame. */
   private readonly footwork = new Footwork();
+  /** A/B playtest metrics for the toggled mechanics (menu → Playtest stats; console: game.playtest.summary()). */
+  readonly playtest = new PlaytestLog();
   private readonly tmpC: V3 = { x: 0, y: 0, z: 0 };
   private playerX = 0;
   private playerZ = 0;
@@ -647,6 +650,7 @@ export class Game {
       this.sfx.play('chime');
     }
     for (const ev of this.duel.events) {
+      this.playtest.onEvent(ev);
       this.onEvent(ev, t);
       if (this.training) this.trainEvent(ev);
     }
@@ -1542,6 +1546,11 @@ export class Game {
         },
         act: () => this.pause.openSub('MECHANICS', this.mechanicsRows()),
       },
+      {
+        label: 'Playtest stats',
+        hint: () => 'How each mechanic is going this session (A/B signals)',
+        act: () => this.pause.openSub('PLAYTEST STATS', this.playtestRows()),
+      },
       { label: 'Tuning', hint: () => 'Dash, dodge, parry, flask numbers (saved)', act: () => this.pause.openSub('TUNING', this.tuningRows()) },
       {
         label: 'Left arm',
@@ -1648,6 +1657,20 @@ export class Game {
           },
     ];
     return rows.filter((r) => !r.hidden);
+  }
+
+  /** Playtest readout: one signal per toggled mechanic, live while the menu is open. */
+  private playtestRows(): MenuItem[] {
+    const rows = this.playtest.summary();
+    return [
+      { label: 'Back', act: () => this.pause.back() },
+      ...rows.map((r, i) => ({ label: r.label, value: () => this.playtest.summary()[i].value, hint: () => r.hint })),
+      {
+        label: 'Reset stats',
+        hint: () => 'Start a new A/B run (e.g. after switching a mechanic)',
+        act: () => this.playtest.reset(),
+      },
+    ];
   }
 
   /** Mechanic toggles in force: defaults overlaid with the player's choices. */
@@ -2031,31 +2054,71 @@ export class Game {
     const e = d.enemy;
     const pf = Math.min(1, e.posture / e.def.postureMax);
     const frenzy = d.frenzy();
-    this.enemyPanel.draw((ctx, w, h) => {
-      ctx.fillStyle = 'rgba(10,12,18,0.6)';
-      roundRect(ctx, 0, 0, w, h, 30);
+    this.enemyPanel.draw((ctx, w) => {
+      // Brass-and-glass gauges, gently curved (Belle Epoque instrument look; Gemini mock-up 2026-11-16).
+      const cx = w / 2;
+      const R = 2200;
+      const half = Math.asin(440 / R);
+      const arc = (cy: number, r: number, from: number, to: number) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, from, to);
+        ctx.stroke();
+      };
+      const tube = (top: number, thick: number, f: number, color: string) => {
+        const cy = top + R;
+        const a0 = -Math.PI / 2 - half;
+        const a1 = -Math.PI / 2 + half;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#b5913a'; // brass casing
+        ctx.lineWidth = thick + 10;
+        arc(cy, R, a0, a1);
+        ctx.strokeStyle = '#17120e'; // dark glass
+        ctx.lineWidth = thick;
+        arc(cy, R, a0, a1);
+        const ff = Math.max(0, Math.min(1, f));
+        if (ff > 0.005) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = thick - 8;
+          arc(cy, R, a0, a0 + 2 * half * ff);
+          ctx.strokeStyle = 'rgba(255,255,255,0.28)'; // glass highlight along the top
+          ctx.lineWidth = thick * 0.18;
+          arc(cy, R - thick * 0.22, a0, a0 + 2 * half * ff);
+        }
+      };
+      ctx.textAlign = 'center';
+      ctx.font = '600 36px Georgia, "Times New Roman", serif';
+      ctx.fillStyle = 'rgba(10,8,6,0.55)';
+      const name = e.def.name.toUpperCase();
+      const nw = ctx.measureText(name).width;
+      roundRect(ctx, cx - nw / 2 - 22, 4, nw + 44, 46, 23);
       ctx.fill();
-      ctx.font = '800 40px system-ui, sans-serif';
-      ctx.fillStyle = '#e8e8e8';
-      ctx.fillText(e.def.name.toUpperCase(), 30, 54);
-      let x = 30 + ctx.measureText(e.def.name.toUpperCase()).width + 24;
+      ctx.fillStyle = '#f2ede0';
+      ctx.fillText(name, cx, 40);
+      ctx.textAlign = 'left';
+      // Badges either side of the name.
+      let x = cx + nw / 2 + 34;
       const badge = (text: string, color: string) => {
-        ctx.font = '800 30px system-ui, sans-serif';
-        const bw = ctx.measureText(text).width + 28;
+        ctx.font = '800 28px system-ui, sans-serif';
+        const bw = ctx.measureText(text).width + 26;
         ctx.fillStyle = color;
-        roundRect(ctx, x, 20, bw, 44, 22);
+        roundRect(ctx, x, 6, bw, 42, 21);
         ctx.fill();
         ctx.fillStyle = '#10131a';
-        ctx.fillText(text, x + 14, 53);
-        x += bw + 12;
+        ctx.fillText(text, x + 13, 37);
+        x += bw + 10;
       };
       if (d.player.chain > 1) badge(`×${d.player.chain} CHAIN`, COLORS.perfect);
       if (frenzy) badge(frenzy.belowHp < 0.3 ? 'FRENZY!' : 'FRENZY', `rgba(255,80,80,${0.75 + 0.25 * Math.sin(t / 120)})`);
-      pill(ctx, 30, 82, w - 60, 40, e.hp / e.def.hp, '#e04848');
-      pill(ctx, 30, 138, w - 60, 34, pf, e.state === 'stagger' ? '#ffffff' : pf > 0.75 ? '#ff5a1a' : '#ffb020');
-      ctx.font = '700 24px system-ui, sans-serif';
-      ctx.fillStyle = 'rgba(16,19,26,0.85)';
-      ctx.fillText(e.state === 'stagger' ? 'BROKEN · STRIKE NOW' : 'POSTURE', 46, 164);
+      tube(78, 34, e.hp / e.def.hp, '#c62a2a');
+      const broken = e.state === 'stagger';
+      tube(128, 24, broken ? 1 : pf, broken ? `rgba(255,255,255,${0.75 + 0.25 * Math.sin(t / 90)})` : pf > 0.75 ? '#ff5a1a' : '#e0a020');
+      if (broken) {
+        ctx.textAlign = 'center';
+        ctx.font = '800 22px system-ui, sans-serif';
+        ctx.fillStyle = '#17120e';
+        ctx.fillText('BROKEN · STRIKE NOW', cx, 137);
+        ctx.textAlign = 'left';
+      }
     });
   }
 

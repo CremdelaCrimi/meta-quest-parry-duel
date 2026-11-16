@@ -119,6 +119,11 @@ Experimental mechanics you can switch on and off mid-fight (saved), each with it
 | Guard Regain | off | Blocks cost 50% of the swing as HP, shown ivory on your HP bar; hit him within 2.5 s to win it back. A clean hit on you forfeits it. |
 | Spam lockout | ON | More than 3 guard entries in 700 ms locks perfect parries for 350 ms. |
 
+**Playtest stats** (menu, next to Mechanics) measure each one live: perfect rate and early-guard
+rate on feints, perfect rate on Fury swings (under 30% = too tight), riposte use per perfect, spam
+lockouts per minute, charges built vs used, Guard Regain HP won back. Reset them between A/B runs;
+`game.playtest.summary()` prints them in the console.
+
 Picked with Gemini (2026-11-16, `docs/design/2026-11-16-gemini-research.md`) from Lies of P's
 delayed attacks, Fury attacks, charged attacks and Guard Regain and Sekiro's deflect rhythm.
 
