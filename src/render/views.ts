@@ -260,7 +260,7 @@ const SWING_MS = 320;
  * Shapes how the swing reads: linear looks robotic, a strong ease-in looks like a snap.
  */
 function swingEase(f: number): number {
-  // TODO(human): shape the swing. f = 0 is the end of the telegraph, f = 1 is impact.
+  // Tune by feel: f = 0 is the end of the telegraph, f = 1 is impact (ease-in = a snap at the end).
   return f * f;
 }
 

@@ -94,6 +94,11 @@ export class PlaytestLog {
     }
   }
 
+  /** Pass/fail flags for the 3-session protocol, shown at the top of Playtest stats. */
+  verdicts(): string[] {
+    return playtestVerdicts(this.n, this.minutes);
+  }
+
   /** Minutes of play logged. */
   get minutes(): number {
     return Number.isNaN(this.startT) ? 0 : Math.max(0, this.lastT - this.startT) / 60000;
@@ -116,4 +121,20 @@ export class PlaytestLog {
       { label: 'Guard Regain won back', value: `${Math.round(n.regainBack)} of ${Math.round(n.regainChip)} HP`, hint: 'Low = blocks feel like pure loss' },
     ];
   }
+}
+
+/**
+ * Turn the session's numbers into short flags the designer reads in the headset, e.g.
+ * "Fury too tight: 18 % perfect (< 30 %)". Gemini's thresholds (docs/design/2026-11-16-gemini-research.md §6):
+ * - overall perfect rate: 40-60 % target, under 20 % = the angle check is too strict;
+ * - spam lockouts: should end under 2 per minute;
+ * - Fury: more than 75 % of Fury swings hitting you = the 400 ms glow is too short;
+ * - Guard Regain: under 30 % won back = he's too hard to punish.
+ * Return [] while there isn't enough data to judge.
+ */
+export function playtestVerdicts(n: PlaytestLog['n'], minutes: number): string[] {
+  // TODO(human)
+  void n;
+  void minutes;
+  return [];
 }

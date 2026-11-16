@@ -1731,6 +1731,11 @@ export class Game {
     const rows = this.playtest.summary();
     return [
       { label: 'Back', act: () => this.pause.back() },
+      {
+        label: 'Verdict',
+        value: () => (this.playtest.verdicts().length ? `${this.playtest.verdicts().length} flag(s)` : 'no flags'),
+        hint: () => this.playtest.verdicts().join(' · ') || 'Nothing out of range yet (or not enough data)',
+      },
       ...rows.map((r, i) => ({ label: r.label, value: () => this.playtest.summary()[i].value, hint: () => r.hint })),
       {
         label: 'Reset stats',
